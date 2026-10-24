@@ -1,36 +1,77 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 5 Signal Battalion — Unit Inventory
 
-## Getting Started
+Unit Property Management System for the unit's private items: register items with
+voucher, notesheet and photo, then track every Issue, Return, Repair, Back from
+Repair and Damaged movement with a full accountability trail.
 
-First, run the development server:
+Built with Next.js 16, React 19 and SQLite (`better-sqlite3`). Runs on one PC and is
+used by others over the local network.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## First-time setup
+
+Requires [Node.js](https://nodejs.org) 20 or newer.
+
+```bat
+cd unit-inventory-system
+npm ci
+copy .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `.env.local` and set your own `INVENTORY_USERNAME` and `INVENTORY_PASSWORD`.
+If you skip this, the old default password is used, and that password is visible
+to anyone who opens this public GitHub repo.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Purpose | Command |
+| --- | --- |
+| Development (auto-reload) | `npm run dev` |
+| Production build | `npm run build` |
+| Production, this PC only | `npm start` |
+| Production, whole LAN | `npm run start:lan` → others open `http://<this-PC-IP>:3000` |
 
-## Learn More
+After pulling new code, run `npm ci` and `npm run build` again before starting.
 
-To learn more about Next.js, take a look at the following resources:
+## Backups
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bat
+npm run backup
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Saves a safe copy of the database and all uploaded files to
+`..\Inventory_Backup\<date_time>\`. You can also give a folder:
+`npm run backup -- E:\InventoryBackups`. It is safe to run while the app is open.
 
-## Deploy on Vercel
+To restore, stop the app and copy the backup's `inventory.db` to `data\inventory.db`
+(delete any `inventory.db-wal` and `inventory.db-shm` next to it). Then copy the
+backup's `uploads` folder to `public\uploads`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Where things are
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Path | What |
+| --- | --- |
+| `data/inventory.db` | The database (items, accountability, transaction history) |
+| `public/uploads/` | Uploaded vouchers, notesheets and photos |
+| `app/` | Pages (Dashboard, Inventory Register, Add/Edit/Remove) and API routes |
+| `lib/db.ts` | All database reads and writes |
+| `lib/inventory.ts` | Stock rules shared by server and browser |
+| `lib/validation.ts` | Checks on everything the server receives |
+| `lib/auth.ts`, `proxy.ts` | Login sessions and page/API protection |
+
+## How stock is tracked
+
+Every item's quantity is split into **accountability rows**: In Store (QM Store),
+Issued (per holder), Repair and Damaged. Each movement moves quantity between them
+and adds a line to the transaction history:
+
+| Movement | From | To |
+| --- | --- | --- |
+| Issue | In Store | Issued (to a holder) |
+| Return | Issued (any or one holder) | In Store |
+| Repair | In Store | Repair |
+| Back from Repair | Repair | In Store |
+| Damaged | In Store | Damaged |
+
+An item's status and "Issued To" come from these rows, so they cannot drift out of
+date. To change who holds an item, use a movement in the Inventory Register rather
+than editing the item.

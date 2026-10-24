@@ -3,38 +3,21 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  const router = useRouter();
+const NAV = [
+  { href: "/", label: "Dashboard" },
+  { href: "/inventory", label: "Inventory Register" },
+  { href: "/manage", label: "Add / Edit / Remove" },
+];
 
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+// Own component so the once-a-second tick re-renders only the clock.
+function Clock() {
   const [dateTime, setDateTime] = useState("");
 
-  function active(path: string) {
-    if (path === "/" && pathname === "/") return "active";
-    if (path !== "/" && pathname.startsWith(path)) return "active";
-    return "";
-  }
-
   useEffect(() => {
-    const savedTheme = localStorage.getItem("inventory_theme") as
-      | "light"
-      | "dark"
-      | null;
-
-    const initialTheme = savedTheme || "light";
-
-    setTheme(initialTheme);
-    document.documentElement.setAttribute("data-theme", initialTheme);
-  }, []);
-
-  useEffect(() => {
-    function updateClock() {
-      const now = new Date();
-
-      const formatted = now.toLocaleString("en-GB", {
+    const format = () =>
+      new Date().toLocaleString("en-GB", {
         weekday: "short",
         day: "2-digit",
         month: "short",
@@ -45,35 +28,66 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         hour12: false,
       });
 
-      setDateTime(formatted);
-    }
+    const timer = setInterval(() => setDateTime(format()), 1000);
+    const first = setTimeout(() => setDateTime(format()), 0);
 
-    updateClock();
-
-    const timer = setInterval(updateClock, 1000);
-
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(first);
+    };
   }, []);
 
-  function toggleTheme() {
-    document.documentElement.classList.add("theme-changing");
+  return (
+    <div className="top-clock">
+      <span>Date & Time</span>
+      <b suppressHydrationWarning>{dateTime}</b>
+    </div>
+  );
+}
 
+// The theme lives on <html data-theme>; the inline script in layout.tsx sets
+// it before paint, and this reads it back.
+function subscribeTheme(callback: () => void) {
+  const observer = new MutationObserver(callback);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => observer.disconnect();
+}
+
+function useTheme() {
+  return useSyncExternalStore(
+    subscribeTheme,
+    () => (document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"),
+    () => "light" as const
+  );
+}
+
+export default function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const theme = useTheme();
+
+  function isActive(path: string) {
+    return path === "/" ? pathname === "/" : pathname.startsWith(path);
+  }
+
+  function toggleTheme() {
+    const root = document.documentElement;
     const nextTheme = theme === "light" ? "dark" : "light";
 
-    setTheme(nextTheme);
-    localStorage.setItem("inventory_theme", nextTheme);
-    document.documentElement.setAttribute("data-theme", nextTheme);
+    root.classList.add("theme-changing");
+    root.setAttribute("data-theme", nextTheme);
 
-    setTimeout(() => {
-      document.documentElement.classList.remove("theme-changing");
-    }, 350);
+    try {
+      localStorage.setItem("inventory_theme", nextTheme);
+    } catch {
+      // storage unavailable; theme still changes for this visit
+    }
+
+    setTimeout(() => root.classList.remove("theme-changing"), 350);
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-    });
-
+    await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
     router.refresh();
   }
@@ -81,6 +95,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === "/login") {
     return <main className="login-only">{children}</main>;
   }
+
+  const themeLabel = theme === "light" ? "Switch to Dark Mode" : "Switch to Light Mode";
 
   return (
     <main className="app-shell">
@@ -102,45 +118,28 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="top-right-area">
-          <div className="top-clock">
-            <span>Date & Time</span>
-            <b>{dateTime}</b>
-          </div>
+          <Clock />
 
-          <div className="top-actions page-links">
-            <Link className={active("/")} href="/">
-              Dashboard
-            </Link>
+          <nav className="top-actions page-links">
+            {NAV.map((link) => (
+              <Link
+                key={link.href}
+                className={isActive(link.href) ? "active" : ""}
+                href={link.href}
+                aria-current={isActive(link.href) ? "page" : undefined}
+              >
+                {link.label}
+              </Link>
+            ))}
 
-            <Link className={active("/inventory")} href="/inventory">
-              Inventory Register
-            </Link>
-
-            <Link className={active("/manage")} href="/manage">
-              Add / Edit / Remove
-            </Link>
-
-            <button
-              className="theme-icon-btn"
-              onClick={toggleTheme}
-              title={
-                theme === "light"
-                  ? "Switch to Dark Mode"
-                  : "Switch to Light Mode"
-              }
-              aria-label={
-                theme === "light"
-                  ? "Switch to Dark Mode"
-                  : "Switch to Light Mode"
-              }
-            >
-              {theme === "light" ? "🌙" : "☀️"}
+            <button className="theme-icon-btn" onClick={toggleTheme} title={themeLabel} aria-label={themeLabel}>
+              <span suppressHydrationWarning>{theme === "light" ? "🌙" : "☀️"}</span>
             </button>
 
             <button className="logout-btn" onClick={logout}>
               Logout
             </button>
-          </div>
+          </nav>
         </div>
       </header>
 
@@ -151,7 +150,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </section>
 
           <footer className="app-footer">
-            <span>© {new Date().getFullYear()} 5 Signal Battalion</span>
+            <span suppressHydrationWarning>© {new Date().getFullYear()} 5 Signal Battalion</span>
             <span>Courtesy: BA 11108 Capt Asif Mahmud, Sigs</span>
           </footer>
         </section>

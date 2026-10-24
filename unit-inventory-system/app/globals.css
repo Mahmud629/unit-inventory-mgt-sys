@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800;900&family=Rajdhani:wght@500;600;700&display=swap");
 
 /* =========================
    ROOT VARIABLES
@@ -2362,4 +2361,54 @@ html[data-theme="dark"] .mini-file-card b {
   .mini-file-thumb {
     height: 70px;
   }
+}
+/* =========================
+   ADDITIONS (optimization pass)
+========================= */
+
+.dashboard-five {
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .dashboard-five {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-five {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+.badge.issue {
+  background-color: var(--sky-soft);
+  color: var(--sky);
+}
+
+.badge.repaired {
+  background-color: var(--green-soft);
+  color: var(--green-dark);
+}
+
+html[data-theme="dark"] .badge.issue {
+  background-color: #12385c;
+  color: #65d8ff;
+}
+
+html[data-theme="dark"] .badge.repaired {
+  background-color: #123a2a;
+  color: #8df06c;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.result-count {
+  margin: 12px 4px 0;
+  font-size: 0.9em;
+  opacity: 0.7;
 }

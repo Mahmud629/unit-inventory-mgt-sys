@@ -4,6 +4,12 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+// Only allow redirects back into this app.
+function safeNext() {
+  const next = new URLSearchParams(window.location.search).get("next") || "/";
+  return next.startsWith("/") && !next.startsWith("//") ? next : "/";
+}
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -14,23 +20,17 @@ export default function LoginPage() {
 
   async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
     setMessage("");
     setLoading(true);
 
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username,
-          password,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         setMessage(data.message || "Login failed.");
@@ -38,7 +38,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace("/");
+      router.replace(safeNext());
       router.refresh();
     } catch {
       setMessage("Unable to login. Please try again.");
@@ -63,7 +63,7 @@ export default function LoginPage() {
         <div className="login-title">
           <h1>Login</h1>
           <p>Unit Property Management System</p>
-          <p>5 Signal BAttalion</p>
+          <p>5 Signal Battalion</p>
         </div>
 
         <form onSubmit={handleLogin} className="login-form">
@@ -74,6 +74,7 @@ export default function LoginPage() {
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Enter username"
               autoComplete="username"
+              required
             />
           </label>
 
@@ -85,19 +86,23 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter password"
               autoComplete="current-password"
+              autoFocus
+              required
             />
           </label>
 
-          {message && <div className="login-error">{message}</div>}
+          {message && (
+            <div className="login-error" role="alert">
+              {message}
+            </div>
+          )}
 
           <button type="submit" disabled={loading}>
             {loading ? "Logging in..." : "Login"}
           </button>
         </form>
 
-        <div className="login-footer-note">
-          Local LAN Access Only
-        </div>
+        <div className="login-footer-note">Local LAN Access Only</div>
       </section>
     </main>
   );

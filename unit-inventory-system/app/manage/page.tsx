@@ -1,154 +1,106 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { FormState, Item } from "@/lib/types";
-import { emptyForm } from "@/lib/types";
+/* eslint-disable @next/next/no-img-element -- uploaded files are served by
+   our own route and already compressed on upload. */
+
+import { useMemo, useState } from "react";
+import { api, errorText, sendJson, uploadFile, useToast } from "@/lib/client";
+import { badgeClass, nextInventoryNo } from "@/lib/inventory";
+import { useItems } from "@/lib/useItems";
+import {
+  CATEGORIES,
+  CONDITIONS,
+  STATUSES,
+  emptyForm,
+  type FormState,
+  type Item,
+} from "@/lib/types";
+
+type Files = { voucher: File | null; notesheet: File | null; photo: File | null };
+const noFiles: Files = { voucher: null, notesheet: null, photo: null };
 
 export default function ManagePage() {
-  const [items, setItems] = useState<Item[]>([]);
+  const { items, loading, error, upsert, remove } = useItems();
   const [form, setForm] = useState<FormState>(emptyForm);
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedNotesheet, setSelectedNotesheet] = useState<File | null>(null);
-  const [selectedPhoto, setSelectedPhoto] = useState<File | null>(null);
-
+  const [files, setFiles] = useState<Files>(noFiles);
   const [editId, setEditId] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
-
-  async function loadItems() {
-    const res = await fetch("/api/items", { cache: "no-store" });
-    const data = await res.json();
-    setItems(data);
-  }
-
-  useEffect(() => {
-    loadItems();
-  }, []);
-
-  function showMessage(text: string) {
-    setMessage(text);
-    setTimeout(() => setMessage(""), 3000);
-  }
+  const [busy, setBusy] = useState(false);
+  // Changing this remounts the file inputs, clearing their chosen file names.
+  const [formKey, setFormKey] = useState(0);
+  const [message, showMessage] = useToast();
 
   const previewInventoryNo = useMemo(() => {
     if (editId && form.inventoryNo) return form.inventoryNo;
-    return generateNextInventoryNo(items);
+    return nextInventoryNo(items.map((i) => i.inventoryNo));
   }, [items, editId, form.inventoryNo]);
 
-  function generateNextInventoryNo(currentItems: Item[]) {
-    const year = new Date().getFullYear();
-
-    const numbers = currentItems
-      .map((item) => {
-        const match = item.inventoryNo.match(/INV-5SIG-\d{4}-(\d+)/);
-        return match ? Number(match[1]) : 0;
-      })
-      .filter((num) => !Number.isNaN(num));
-
-    const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-
-    return `INV-5SIG-${year}-${String(nextNumber).padStart(4, "0")}`;
+  function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
   }
 
-  async function uploadFile(file: File | null, existingUrl: string) {
-    if (!file) return existingUrl;
-
-    const fd = new FormData();
-    fd.append("file", file);
-
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      body: fd,
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.message || "File upload failed.");
-    }
-
-    return data.url;
+  function resetForm() {
+    setForm(emptyForm);
+    setFiles(noFiles);
+    setEditId(null);
+    setFormKey((k) => k + 1);
   }
 
   function validateForm() {
     if (!form.itemName.trim()) return "Item Name is required.";
     if (!form.category.trim()) return "Category is required.";
-    if (!form.quantity || form.quantity < 1) return "Quantity is required.";
-    if (!form.buyDate.trim()) return "Buying Date is required.";
-    if (form.cost === null || form.cost === undefined || Number.isNaN(Number(form.cost))) {
-      return "Cost is required.";
-    }
+    if (!Number.isInteger(form.quantity) || form.quantity < 1) return "Quantity must be a whole number of at least 1.";
+    if (!form.buyDate) return "Buying Date is required.";
+    if (Number.isNaN(Number(form.cost))) return "Cost is required.";
     if (Number(form.cost) < 0) return "Cost cannot be negative.";
     if (!form.voucherNo.trim()) return "Voucher No is required.";
-    if (!form.condition.trim()) return "Condition is required.";
-    if (!form.status.trim()) return "Status is required.";
-
-    if (!editId && !selectedFile) {
-      return "Voucher File is required.";
+    if (!form.voucherUrl && !files.voucher) return "Voucher File is required.";
+    if (!editId && form.status === "Issued" && !form.issuedTo.trim()) {
+      return "Issued To is required when status is Issued.";
     }
-
-    if (editId && !form.voucherUrl && !selectedFile) {
-      return "Voucher File is required.";
-    }
-
     return "";
   }
 
   async function saveItem() {
+    if (busy) return;
+
+    const validationMessage = validateForm();
+    if (validationMessage) {
+      showMessage(validationMessage);
+      return;
+    }
+
+    const wasEditing = Boolean(editId);
+    setBusy(true);
+
     try {
-      const validationMessage = validateForm();
+      const [voucherUrl, notesheetUrl, productPhotoUrl] = await Promise.all([
+        uploadFile(files.voucher, form.voucherUrl),
+        uploadFile(files.notesheet, form.notesheetUrl),
+        uploadFile(files.photo, form.productPhotoUrl),
+      ]);
 
-      if (validationMessage) {
-        showMessage(validationMessage);
-        return;
-      }
+      const payload = { ...form, voucherUrl, notesheetUrl, productPhotoUrl };
 
-      const voucherUrl = await uploadFile(selectedFile, form.voucherUrl);
-      const notesheetUrl = await uploadFile(selectedNotesheet, form.notesheetUrl);
-      const productPhotoUrl = await uploadFile(selectedPhoto, form.productPhotoUrl);
+      const saved = editId
+        ? await sendJson<Item>(`/api/items/${editId}`, "PUT", payload)
+        : await sendJson<Item>("/api/items", "POST", payload);
 
-      const payload = {
-        ...form,
-        inventoryNo: editId ? form.inventoryNo : previewInventoryNo,
-        voucherUrl,
-        notesheetUrl,
-        productPhotoUrl,
-      };
-
-      const url = editId ? `/api/items/${editId}` : "/api/items";
-      const method = editId ? "PUT" : "POST";
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        showMessage(data.message || "Save failed.");
-        return;
-      }
-
-      setForm(emptyForm);
-      setSelectedFile(null);
-      setSelectedNotesheet(null);
-      setSelectedPhoto(null);
-      setEditId(null);
-      await loadItems();
-
-      showMessage(editId ? "Item updated successfully." : "Item saved successfully.");
+      upsert(saved);
+      resetForm();
+      showMessage(
+        wasEditing
+          ? `${saved.inventoryNo} updated successfully.`
+          : `${saved.inventoryNo} saved successfully.`
+      );
     } catch (err) {
-      showMessage(err instanceof Error ? err.message : "Something went wrong.");
+      showMessage(errorText(err));
+    } finally {
+      setBusy(false);
     }
   }
 
   function editItem(item: Item) {
     setEditId(item.id);
-
     setForm({
       inventoryNo: item.inventoryNo,
       itemName: item.itemName,
@@ -157,8 +109,8 @@ export default function ManagePage() {
       buyDate: item.buyDate,
       voucherNo: item.voucherNo,
       voucherUrl: item.voucherUrl,
-      notesheetUrl: item.notesheetUrl || "",
-      productPhotoUrl: item.productPhotoUrl || "",
+      notesheetUrl: item.notesheetUrl,
+      productPhotoUrl: item.productPhotoUrl,
       location: item.location,
       cost: item.cost,
       condition: item.condition,
@@ -167,32 +119,30 @@ export default function ManagePage() {
       issueDate: item.issueDate,
       remarks: item.remarks,
     });
-
-    setSelectedFile(null);
-    setSelectedNotesheet(null);
-    setSelectedPhoto(null);
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
+    setFiles(noFiles);
+    setFormKey((k) => k + 1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function deleteItem(id: string) {
-    const ok = confirm("Delete this item permanently?");
-    if (!ok) return;
+  async function deleteItem(item: Item) {
+    if (!confirm(`Delete ${item.inventoryNo} (${item.itemName}) and its full history permanently?`)) {
+      return;
+    }
 
-    const res = await fetch(`/api/items/${id}`, {
-      method: "DELETE",
-    });
-
-    if (res.ok) {
-      await loadItems();
+    try {
+      await api(`/api/items/${item.id}`, { method: "DELETE" });
+      remove(item.id);
+      if (editId === item.id) resetForm();
       showMessage("Item deleted.");
-    } else {
-      showMessage("Delete failed.");
+    } catch (err) {
+      showMessage(errorText(err));
     }
   }
+
+  // Keep categories that exist in old records selectable.
+  const categoryOptions = CATEGORIES.includes(form.category as (typeof CATEGORIES)[number])
+    ? CATEGORIES
+    : [...CATEGORIES, form.category];
 
   return (
     <section>
@@ -217,29 +167,23 @@ export default function ManagePage() {
             </p>
           </div>
 
-          <div className="form-grid two-field-form">
+          <div className="form-grid two-field-form" key={formKey}>
             <label>
               Item Name *
               <input
                 value={form.itemName}
-                onChange={(e) => setForm({ ...form, itemName: e.target.value })}
+                onChange={(e) => set("itemName", e.target.value)}
                 placeholder="Table / Chair / Light"
+                maxLength={200}
               />
             </label>
 
             <label>
               Category *
-              <select
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-              >
-                <option>Furniture</option>
-                <option>Crockery</option>
-                <option>Electrical</option>
-                <option>Stationery</option>
-                <option>Sports</option>
-                <option>Kitchen</option>
-                <option>Other</option>
+              <select value={form.category} onChange={(e) => set("category", e.target.value)}>
+                {categoryOptions.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
               </select>
             </label>
 
@@ -247,30 +191,25 @@ export default function ManagePage() {
               Quantity *
               <input
                 type="number"
-                min="1"
-                value={form.quantity}
-                onChange={(e) =>
-                  setForm({ ...form, quantity: Number(e.target.value) })
-                }
+                min={1}
+                step={1}
+                value={form.quantity || ""}
+                onChange={(e) => set("quantity", Number(e.target.value))}
               />
             </label>
 
             <label>
               Buying Date *
-              <input
-                type="date"
-                value={form.buyDate}
-                onChange={(e) => setForm({ ...form, buyDate: e.target.value })}
-              />
+              <input type="date" value={form.buyDate} onChange={(e) => set("buyDate", e.target.value)} />
             </label>
 
             <label>
-              Cost *
+              Cost (৳) *
               <input
                 type="number"
-                min="0"
+                min={0}
                 value={form.cost}
-                onChange={(e) => setForm({ ...form, cost: Number(e.target.value) })}
+                onChange={(e) => set("cost", Number(e.target.value))}
               />
             </label>
 
@@ -278,7 +217,7 @@ export default function ManagePage() {
               Location
               <input
                 value={form.location}
-                onChange={(e) => setForm({ ...form, location: e.target.value })}
+                onChange={(e) => set("location", e.target.value)}
                 placeholder="QM Store"
               />
             </label>
@@ -287,7 +226,7 @@ export default function ManagePage() {
               Voucher No *
               <input
                 value={form.voucherNo}
-                onChange={(e) => setForm({ ...form, voucherNo: e.target.value })}
+                onChange={(e) => set("voucherNo", e.target.value)}
                 placeholder="CRV 112"
               />
             </label>
@@ -296,62 +235,66 @@ export default function ManagePage() {
               Condition *
               <select
                 value={form.condition}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    condition: e.target.value as FormState["condition"],
-                  })
-                }
+                onChange={(e) => set("condition", e.target.value as FormState["condition"])}
               >
-                <option>Excellent</option>
-                <option>Good</option>
-                <option>Repairable</option>
-                <option>Poor</option>
+                {CONDITIONS.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
               </select>
             </label>
 
-            <label>
-              Status *
-              <select
-                value={form.status}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    status: e.target.value as FormState["status"],
-                  })
-                }
-              >
-                <option>In Store</option>
-                <option>Issued</option>
-                <option>Repair</option>
-                <option>Damaged</option>
-              </select>
-            </label>
+            {editId ? (
+              <div className="full existing-file">
+                <b>Status:</b> <span className={badgeClass(form.status)}>{form.status}</span>
+                <br />
+                Status and holders change through Issue / Return / Repair in the Inventory Register.
+              </div>
+            ) : (
+              <>
+                <label>
+                  Initial Status *
+                  <select
+                    value={form.status}
+                    onChange={(e) => set("status", e.target.value as FormState["status"])}
+                  >
+                    {STATUSES.map((s) => (
+                      <option key={s}>{s}</option>
+                    ))}
+                  </select>
+                </label>
 
-            <label>
-              Issued To
-              <input
-                value={form.issuedTo}
-                onChange={(e) => setForm({ ...form, issuedTo: e.target.value })}
-                placeholder="Name / Rank / Office / Section"
-              />
-            </label>
+                {form.status === "Issued" ? (
+                  <>
+                    <label>
+                      Issued To *
+                      <input
+                        value={form.issuedTo}
+                        onChange={(e) => set("issuedTo", e.target.value)}
+                        placeholder="Name / Rank / Office / Section"
+                      />
+                    </label>
 
-            <label>
-              Issue Date
-              <input
-                type="date"
-                value={form.issueDate}
-                onChange={(e) => setForm({ ...form, issueDate: e.target.value })}
-              />
-            </label>
+                    <label>
+                      Issue Date
+                      <input
+                        type="date"
+                        value={form.issueDate}
+                        onChange={(e) => set("issueDate", e.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <div />
+                )}
+              </>
+            )}
 
             <label className="full">
-              Voucher File *
+              Voucher File * {form.voucherUrl && !files.voucher ? "(leave empty to keep current)" : ""}
               <input
                 type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => setFiles((f) => ({ ...f, voucher: e.target.files?.[0] || null }))}
               />
             </label>
 
@@ -359,10 +302,8 @@ export default function ManagePage() {
               Notesheet
               <input
                 type="file"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) =>
-                  setSelectedNotesheet(e.target.files?.[0] || null)
-                }
+                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => setFiles((f) => ({ ...f, notesheet: e.target.files?.[0] || null }))}
               />
             </label>
 
@@ -370,15 +311,15 @@ export default function ManagePage() {
               Product Photo
               <input
                 type="file"
-                accept=".jpg,.jpeg,.png"
-                onChange={(e) => setSelectedPhoto(e.target.files?.[0] || null)}
+                accept=".jpg,.jpeg,.png,.webp"
+                onChange={(e) => setFiles((f) => ({ ...f, photo: e.target.files?.[0] || null }))}
               />
             </label>
 
             {form.voucherUrl && (
               <div className="full existing-file">
                 <b>Current Voucher:</b>{" "}
-                <a href={form.voucherUrl} target="_blank">
+                <a href={form.voucherUrl} target="_blank" rel="noopener noreferrer">
                   Open Voucher
                 </a>
               </div>
@@ -387,7 +328,7 @@ export default function ManagePage() {
             {form.notesheetUrl && (
               <div className="full existing-file">
                 <b>Current Notesheet:</b>{" "}
-                <a href={form.notesheetUrl} target="_blank">
+                <a href={form.notesheetUrl} target="_blank" rel="noopener noreferrer">
                   Open Notesheet
                 </a>
               </div>
@@ -397,11 +338,7 @@ export default function ManagePage() {
               <div className="full existing-file">
                 <b>Current Product Photo:</b>
                 <br />
-                <img
-                  src={form.productPhotoUrl}
-                  alt="Current product"
-                  className="product-preview"
-                />
+                <img src={form.productPhotoUrl} alt="Current product" className="product-preview" />
               </div>
             )}
 
@@ -409,28 +346,19 @@ export default function ManagePage() {
               Remarks
               <textarea
                 value={form.remarks}
-                onChange={(e) => setForm({ ...form, remarks: e.target.value })}
+                onChange={(e) => set("remarks", e.target.value)}
                 placeholder="Additional notes"
               />
             </label>
           </div>
 
           <div className="actions">
-            <button
-              className="dark"
-              onClick={() => {
-                setForm(emptyForm);
-                setEditId(null);
-                setSelectedFile(null);
-                setSelectedNotesheet(null);
-                setSelectedPhoto(null);
-              }}
-            >
-              Clear
+            <button className="dark" onClick={resetForm} disabled={busy}>
+              {editId ? "Cancel Edit" : "Clear"}
             </button>
 
-            <button onClick={saveItem}>
-              {editId ? "Update Item" : "Save Item"}
+            <button onClick={saveItem} disabled={busy}>
+              {busy ? "Saving…" : editId ? "Update Item" : "Save Item"}
             </button>
           </div>
         </section>
@@ -462,46 +390,34 @@ export default function ManagePage() {
                 {items.map((item, index) => (
                   <tr key={item.id}>
                     <td>{index + 1}</td>
-
                     <td>
                       {item.productPhotoUrl ? (
                         <img
                           src={item.productPhotoUrl}
                           alt={item.itemName}
                           className="item-thumb"
+                          loading="lazy"
+                          decoding="async"
                         />
                       ) : (
                         "—"
                       )}
                     </td>
-
                     <td className="wrap-cell strong-cell">{item.inventoryNo}</td>
                     <td className="wrap-cell">{item.itemName}</td>
                     <td className="wrap-cell">{item.category}</td>
                     <td>{item.quantity}</td>
                     <td className="wrap-cell">{item.issuedTo || "—"}</td>
                     <td className="wrap-cell">{item.location || "—"}</td>
-
                     <td>
-                      <span
-                        className={`badge ${item.status
-                          .replaceAll(" ", "-")
-                          .toLowerCase()}`}
-                      >
-                        {item.status}
-                      </span>
+                      <span className={badgeClass(item.status)}>{item.status}</span>
                     </td>
-
                     <td>
                       <div className="row-buttons">
-                        <button className="small" onClick={() => editItem(item)}>
+                        <button className="small" onClick={() => editItem(item)} disabled={busy}>
                           Edit
                         </button>
-
-                        <button
-                          className="small danger"
-                          onClick={() => deleteItem(item.id)}
-                        >
+                        <button className="small danger" onClick={() => deleteItem(item)} disabled={busy}>
                           Remove
                         </button>
                       </div>
@@ -512,7 +428,7 @@ export default function ManagePage() {
                 {items.length === 0 && (
                   <tr>
                     <td colSpan={10} className="empty">
-                      No item found.
+                      {loading ? "Loading…" : error || "No item found."}
                     </td>
                   </tr>
                 )}
@@ -522,7 +438,7 @@ export default function ManagePage() {
         </section>
       </div>
 
-      {message && <div className="toast">{message}</div>}
+      {message && <div className="toast" role="status">{message}</div>}
     </section>
   );
 }

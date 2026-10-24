@@ -1,275 +1,216 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { Allocation, Item, TransactionType } from "@/lib/types";
+/* eslint-disable @next/next/no-img-element -- uploaded files are served by
+   our own route and already compressed on upload. */
 
-type TransactionForm = {
-  type: Exclude<TransactionType, "Purchase">;
-  item: Item;
+import { useCallback, useDeferredValue, useMemo, useState } from "react";
+import { errorText, sendJson, useEscape, useToast } from "@/lib/client";
+import {
+  badgeClass,
+  getBreakdown,
+  getIssuedHolders,
+  isImageFile,
+  localDate,
+  searchText,
+  type Breakdown,
+} from "@/lib/inventory";
+import { useItems } from "@/lib/useItems";
+import { CATEGORIES, STATUSES, type Item, type MovementType } from "@/lib/types";
+
+type PreviewFile = { title: string; url: string; image: boolean };
+
+type TxnState = {
+  type: MovementType;
+  itemId: string;
+  qty: number;
+  issuedTo: string;
+  date: string;
+  voucherNo: string;
+  remarks: string;
 };
 
-type PreviewFile = {
+const FILTERS = ["All", ...CATEGORIES, ...STATUSES];
+
+const MOVEMENTS: {
+  type: MovementType;
+  button: string;
   title: string;
-  url: string;
-  type: "image" | "file";
+  note: string;
+  from: keyof Breakdown;
+}[] = [
+  {
+    type: "Issue",
+    button: "Issue",
+    title: "Issue Item",
+    note: "Issue selected quantity to a person, office, company or section.",
+    from: "In Store",
+  },
+  {
+    type: "Return",
+    button: "Return",
+    title: "Return Item",
+    note: "Return previously issued quantity back to store. Returned From is optional.",
+    from: "Issued",
+  },
+  {
+    type: "Repair",
+    button: "Repair",
+    title: "Send for Repair",
+    note: "This will move quantity from In Store to Repair Store.",
+    from: "In Store",
+  },
+  {
+    type: "Repaired",
+    button: "Back from Repair",
+    title: "Back from Repair",
+    note: "This will move repaired quantity from Repair Store back to In Store.",
+    from: "Repair",
+  },
+  {
+    type: "Damaged",
+    button: "Damaged",
+    title: "Mark as Damaged",
+    note: "This will move quantity from In Store to Damaged Store.",
+    from: "In Store",
+  },
+];
+
+const today = () => localDate();
+
+const EMPTY_HINT: Record<keyof Breakdown, string> = {
+  "In Store": "Nothing in store",
+  Issued: "Nothing issued",
+  Repair: "Nothing in repair",
+  Damaged: "Nothing damaged",
 };
 
-function sumAllocations(allocations: Allocation[] = [], type: string) {
-  return allocations
-    .filter((allocation) => allocation.type === type)
-    .reduce((sum, allocation) => sum + Number(allocation.qty || 0), 0);
-}
-
-function isImageFile(url: string) {
-  const lower = url.toLowerCase();
-  return (
-    lower.endsWith(".jpg") ||
-    lower.endsWith(".jpeg") ||
-    lower.endsWith(".png") ||
-    lower.endsWith(".webp")
-  );
+function csvCell(value: unknown) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
 export default function InventoryPage() {
-  const [items, setItems] = useState<Item[]>([]);
+  const { items, loading, error, upsert } = useItems();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
-  const [selected, setSelected] = useState<Item | null>(null);
-  const [message, setMessage] = useState("");
-
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filePreview, setFilePreview] = useState<PreviewFile | null>(null);
+  const [txn, setTxn] = useState<TxnState | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, showMessage] = useToast();
 
-  const [txnForm, setTxnForm] = useState<TransactionForm | null>(null);
-  const [txnQty, setTxnQty] = useState(1);
-  const [txnIssuedTo, setTxnIssuedTo] = useState("");
-  const [txnDate, setTxnDate] = useState("");
-  const [txnVoucherNo, setTxnVoucherNo] = useState("");
-  const [txnRemarks, setTxnRemarks] = useState("");
+  // Typing stays responsive; filtering catches up a moment later.
+  const deferredSearch = useDeferredValue(search);
 
-  async function loadItems() {
-    const res = await fetch("/api/items", { cache: "no-store" });
-    const data = await res.json();
-    setItems(data);
-  }
+  // Work that only changes when the data changes, not on every keystroke.
+  const rows = useMemo(
+    () =>
+      items.map((item) => ({
+        item,
+        breakdown: getBreakdown(item.allocations),
+        text: searchText(item),
+      })),
+    [items]
+  );
 
-  useEffect(() => {
-    loadItems();
-  }, []);
+  const filtered = useMemo(() => {
+    const q = deferredSearch.toLowerCase().trim();
 
-  function showMessage(text: string) {
-    setMessage(text);
-    setTimeout(() => setMessage(""), 3000);
-  }
+    return rows.filter(
+      ({ item, text }) =>
+        (filter === "All" || item.category === filter || item.status === filter) &&
+        (!q || text.includes(q))
+    );
+  }, [rows, deferredSearch, filter]);
+
+  const selectedRow = rows.find((r) => r.item.id === selectedId) || null;
+  const txnRow = txn ? rows.find((r) => r.item.id === txn.itemId) || null : null;
+  const txnConfig = txn ? MOVEMENTS.find((m) => m.type === txn.type)! : null;
+
+  const closeTopModal = useCallback(() => {
+    if (filePreview) setFilePreview(null);
+    else if (txn) setTxn(null);
+    else setSelectedId(null);
+  }, [filePreview, txn]);
+
+  useEscape(filePreview || txn || selectedId ? closeTopModal : null);
 
   function openPreview(title: string, url: string) {
     if (!url) {
       showMessage(`${title} is not available.`);
       return;
     }
-
-    setFilePreview({
-      title,
-      url,
-      type: isImageFile(url) ? "image" : "file",
-    });
+    setFilePreview({ title, url, image: isImageFile(url) });
   }
 
-  function openTransactionModal(
-    type: Exclude<TransactionType, "Purchase">,
-    item: Item
-  ) {
-    setTxnForm({ type, item });
-    setTxnQty(1);
-    setTxnIssuedTo("");
-    setTxnDate(new Date().toISOString().slice(0, 10));
-    setTxnVoucherNo("");
-    setTxnRemarks("");
-  }
-
-  function closeTransactionModal() {
-    setTxnForm(null);
-    setTxnQty(1);
-    setTxnIssuedTo("");
-    setTxnDate("");
-    setTxnVoucherNo("");
-    setTxnRemarks("");
+  function openTransaction(type: MovementType, item: Item) {
+    setTxn({ type, itemId: item.id, qty: 1, issuedTo: "", date: today(), voucherNo: "", remarks: "" });
   }
 
   async function submitTransaction() {
-    if (!txnForm) return;
+    if (!txn || !txnRow || !txnConfig || busy) return;
 
-    const { type, item } = txnForm;
+    const available =
+      txn.type === "Return" && txn.issuedTo
+        ? getIssuedHolders(txnRow.item.allocations).find((h) => h.holder === txn.issuedTo)?.qty || 0
+        : txnRow.breakdown[txnConfig.from];
 
-    if (!txnQty || txnQty < 1) {
+    if (!Number.isInteger(txn.qty) || txn.qty < 1) {
       showMessage("Valid quantity is required.");
       return;
     }
-
-    const storeQty = sumAllocations(item.allocations, "In Store");
-    const issuedQty = sumAllocations(item.allocations, "Issued");
-
-    if (type === "Issue" && txnQty > storeQty) {
-      showMessage("Issue quantity cannot exceed In Store quantity.");
+    if (txn.qty > available) {
+      showMessage(`Quantity cannot exceed ${available} (${txnConfig.from}).`);
       return;
     }
-
-    if (type === "Return" && txnQty > issuedQty) {
-      showMessage("Return quantity cannot exceed issued quantity.");
-      return;
-    }
-
-    if ((type === "Repair" || type === "Damaged") && txnQty > storeQty) {
-      showMessage(`${type} quantity cannot exceed In Store quantity.`);
-      return;
-    }
-
-    if (type === "Issue" && !txnIssuedTo.trim()) {
+    if (txn.type === "Issue" && !txn.issuedTo.trim()) {
       showMessage("Issued To field is required.");
       return;
     }
 
-    const res = await fetch(`/api/items/${item.id}/transaction`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type,
-        qty: txnQty,
-        issuedTo: txnIssuedTo,
-        voucherNo: txnVoucherNo,
-        remarks: txnRemarks,
-        date: txnDate || new Date().toISOString().slice(0, 10),
-      }),
-    });
+    setBusy(true);
 
-    const data = await res.json();
+    try {
+      const updated = await sendJson<Item>(`/api/items/${txn.itemId}/transaction`, "POST", {
+        ...txn,
+        date: txn.date || today(),
+      });
 
-    if (!res.ok) {
-      showMessage(data.message || "Transaction failed.");
-      return;
+      upsert(updated);
+      setTxn(null);
+      showMessage(`${txnConfig.title} completed successfully.`);
+    } catch (err) {
+      showMessage(errorText(err));
+    } finally {
+      setBusy(false);
     }
-
-    await loadItems();
-    setSelected(data);
-    closeTransactionModal();
-    showMessage(`${type} transaction completed successfully.`);
   }
 
   function exportCSV() {
     const header = [
-      "Inventory No",
-      "Item",
-      "Category",
-      "Total Qty",
-      "In Store",
-      "Issued",
-      "Repair",
-      "Damaged",
-      "Voucher No",
-      "Location",
-      "Cost",
-      "Condition",
-      "Status",
-      "Remarks",
+      "Inventory No", "Item", "Category", "Total Qty", "In Store", "Issued",
+      "Repair", "Damaged", "Issued To", "Voucher No", "Location", "Cost",
+      "Condition", "Status", "Remarks",
     ];
 
-    const rows = items.map((x) => [
-      x.inventoryNo,
-      x.itemName,
-      x.category,
-      x.quantity,
-      sumAllocations(x.allocations, "In Store"),
-      sumAllocations(x.allocations, "Issued"),
-      sumAllocations(x.allocations, "Repair"),
-      sumAllocations(x.allocations, "Damaged"),
-      x.voucherNo,
-      x.location,
-      x.cost,
-      x.condition,
-      x.status,
-      x.remarks,
+    const lines = rows.map(({ item: x, breakdown: b }) => [
+      x.inventoryNo, x.itemName, x.category, x.quantity, b["In Store"], b.Issued,
+      b.Repair, b.Damaged,
+      getIssuedHolders(x.allocations).map((h) => `${h.holder} (${h.qty})`).join("; "),
+      x.voucherNo, x.location, x.cost, x.condition, x.status, x.remarks,
     ]);
 
-    const csv = [header, ...rows]
-      .map((row) =>
-        row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")
-      )
-      .join("\n");
-
-    const blob = new Blob([csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-
-    const url = URL.createObjectURL(blob);
-
+    // The BOM makes Excel read Bangla text and ৳ correctly.
+    const csv = "﻿" + [header, ...lines].map((row) => row.map(csvCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "unit-inventory-register.csv";
+    a.download = `unit-inventory-register-${today()}.csv`;
     a.click();
-
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  const filtered = useMemo(() => {
-    return items.filter((item) => {
-      const q = search.toLowerCase().trim();
-
-      const allocationText = (item.allocations || [])
-        .map(
-          (allocation) =>
-            `${allocation.type} ${allocation.holder} ${allocation.location} ${allocation.voucherNo} ${allocation.remarks}`
-        )
-        .join(" ")
-        .toLowerCase();
-
-      const matchesSearch =
-        !q ||
-        item.inventoryNo.toLowerCase().includes(q) ||
-        item.itemName.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q) ||
-        item.location.toLowerCase().includes(q) ||
-        item.issuedTo.toLowerCase().includes(q) ||
-        item.voucherNo.toLowerCase().includes(q) ||
-        item.condition.toLowerCase().includes(q) ||
-        item.status.toLowerCase().includes(q) ||
-        item.remarks.toLowerCase().includes(q) ||
-        allocationText.includes(q);
-
-      const matchesFilter =
-        filter === "All" || item.category === filter || item.status === filter;
-
-      return matchesSearch && matchesFilter;
-    });
-  }, [items, search, filter]);
-
-  function getTransactionTitle(type: string) {
-    if (type === "Issue") return "Issue Item";
-    if (type === "Return") return "Return Item";
-    if (type === "Repair") return "Send for Repair";
-    if (type === "Damaged") return "Mark as Damaged";
-    return "Transaction";
-  }
-
-  function getTransactionNote(type: string) {
-    if (type === "Issue") {
-      return "Issue selected quantity to a person, office, company or section.";
-    }
-
-    if (type === "Return") {
-      return "Return previously issued quantity back to store. Returned From is optional.";
-    }
-
-    if (type === "Repair") {
-      return "This will move quantity from In Store to Repair Store.";
-    }
-
-    if (type === "Damaged") {
-      return "This will move quantity from In Store to Damaged Store.";
-    }
-
-    return "";
-  }
+  const selected = selectedRow?.item;
+  const sb = selectedRow?.breakdown;
 
   return (
     <section>
@@ -281,31 +222,21 @@ export default function InventoryPage() {
 
         <div className="page-actions">
           <input
+            type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search inv no / item / holder / voucher no"
           />
 
-          <button onClick={exportCSV}>Export CSV</button>
+          <button onClick={exportCSV} disabled={items.length === 0}>
+            Export CSV
+          </button>
         </div>
       </div>
 
       <section className="panel">
         <div className="filters">
-          {[
-            "All",
-            "Furniture",
-            "Crockery",
-            "Electrical",
-            "Stationery",
-            "Sports",
-            "Kitchen",
-            "Other",
-            "In Store",
-            "Issued",
-            "Repair",
-            "Damaged",
-          ].map((f) => (
+          {FILTERS.map((f) => (
             <button
               key={f}
               className={filter === f ? "active-filter" : ""}
@@ -338,7 +269,7 @@ export default function InventoryPage() {
             </thead>
 
             <tbody>
-              {filtered.map((item, index) => (
+              {filtered.map(({ item, breakdown: b }, index) => (
                 <tr key={item.id}>
                   <td>{index + 1}</td>
 
@@ -348,33 +279,30 @@ export default function InventoryPage() {
                         src={item.productPhotoUrl}
                         alt={item.itemName}
                         className="item-thumb clickable-thumb"
-                        onClick={() =>
-                          openPreview("Product Photo", item.productPhotoUrl)
-                        }
+                        loading="lazy"
+                        decoding="async"
+                        onClick={() => openPreview("Product Photo", item.productPhotoUrl)}
                       />
                     ) : (
                       "—"
                     )}
                   </td>
 
-                  <td className="link" onClick={() => setSelected(item)}>
+                  <td className="link" onClick={() => setSelectedId(item.id)}>
                     {item.inventoryNo}
                   </td>
 
                   <td>{item.itemName}</td>
                   <td>{item.category}</td>
                   <td>{item.quantity}</td>
-                  <td>{sumAllocations(item.allocations, "In Store")}</td>
-                  <td>{sumAllocations(item.allocations, "Issued")}</td>
-                  <td>{sumAllocations(item.allocations, "Repair")}</td>
-                  <td>{sumAllocations(item.allocations, "Damaged")}</td>
+                  <td>{b["In Store"]}</td>
+                  <td>{b.Issued}</td>
+                  <td>{b.Repair}</td>
+                  <td>{b.Damaged}</td>
 
                   <td>
                     {item.voucherUrl ? (
-                      <button
-                        className="small"
-                        onClick={() => openPreview("Voucher", item.voucherUrl)}
-                      >
+                      <button className="small" onClick={() => openPreview("Voucher", item.voucherUrl)}>
                         {item.voucherNo || "View"}
                       </button>
                     ) : (
@@ -385,17 +313,11 @@ export default function InventoryPage() {
                   <td>{item.condition}</td>
 
                   <td>
-                    <span
-                      className={`badge ${item.status
-                        .replaceAll(" ", "-")
-                        .toLowerCase()}`}
-                    >
-                      {item.status}
-                    </span>
+                    <span className={badgeClass(item.status)}>{item.status}</span>
                   </td>
 
                   <td>
-                    <button className="small" onClick={() => setSelected(item)}>
+                    <button className="small" onClick={() => setSelectedId(item.id)}>
                       View
                     </button>
                   </td>
@@ -405,128 +327,67 @@ export default function InventoryPage() {
               {filtered.length === 0 && (
                 <tr>
                   <td colSpan={14} className="empty">
-                    No item found.
+                    {loading ? "Loading…" : error || "No item found."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {!loading && items.length > 0 && (
+          <p className="result-count">
+            Showing {filtered.length} of {items.length} item lines
+          </p>
+        )}
       </section>
 
-      {selected && (
-        <div className="modal-bg" onClick={() => setSelected(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {selected && sb && (
+        <div className="modal-bg" onClick={() => setSelectedId(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <h2>{selected.itemName}</h2>
-              <button onClick={() => setSelected(null)}>×</button>
+              <button onClick={() => setSelectedId(null)} aria-label="Close">×</button>
             </div>
+
             <div className="file-preview-strip">
-              <div
-                className={`mini-file-card ${
-                  selected.productPhotoUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Product Photo", selected.productPhotoUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.productPhotoUrl ? (
-                    <img src={selected.productPhotoUrl} alt="Product Photo" />
-                  ) : (
-                    <span>—</span>
-                  )}
+              {[
+                { title: "Product Photo", url: selected.productPhotoUrl },
+                { title: "Voucher", url: selected.voucherUrl },
+                { title: "Notesheet", url: selected.notesheetUrl },
+              ].map((file) => (
+                <div
+                  key={file.title}
+                  className={`mini-file-card ${file.url ? "" : "disabled-file-card"}`}
+                  onClick={() => openPreview(file.title, file.url)}
+                >
+                  <div className="mini-file-thumb">
+                    {file.url && isImageFile(file.url) ? (
+                      <img src={file.url} alt={file.title} loading="lazy" />
+                    ) : (
+                      <span>{file.url ? "📄" : "—"}</span>
+                    )}
+                  </div>
+                  <b>{file.title}</b>
                 </div>
-                <b>Product Photo</b>
-              </div>
-
-              <div
-                className={`mini-file-card ${
-                  selected.voucherUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Voucher", selected.voucherUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.voucherUrl && isImageFile(selected.voucherUrl) ? (
-                    <img src={selected.voucherUrl} alt="Voucher" />
-                  ) : (
-                    <span>📄</span>
-                  )}
-                </div>
-                <b>Voucher</b>
-              </div>
-
-              <div
-                className={`mini-file-card ${
-                  selected.notesheetUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Notesheet", selected.notesheetUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.notesheetUrl && isImageFile(selected.notesheetUrl) ? (
-                    <img src={selected.notesheetUrl} alt="Notesheet" />
-                  ) : (
-                    <span>📄</span>
-                  )}
-                </div>
-                <b>Notesheet</b>
-              </div>
+              ))}
             </div>
 
             <div className="detail-grid">
-              <p>
-                <b>Inventory No:</b> {selected.inventoryNo}
-              </p>
-
-              <p>
-                <b>Category:</b> {selected.category}
-              </p>
-
-              <p>
-                <b>Total Quantity:</b> {selected.quantity}
-              </p>
-
-              <p>
-                <b>In Store:</b> {sumAllocations(selected.allocations, "In Store")}
-              </p>
-
-              <p>
-                <b>Issued:</b> {sumAllocations(selected.allocations, "Issued")}
-              </p>
-
-              <p>
-                <b>Repair:</b> {sumAllocations(selected.allocations, "Repair")}
-              </p>
-
-              <p>
-                <b>Damaged:</b> {sumAllocations(selected.allocations, "Damaged")}
-              </p>
-
-              <p>
-                <b>Buy Date:</b> {selected.buyDate || "—"}
-              </p>
-
-              <p>
-                <b>Location:</b> {selected.location || "—"}
-              </p>
-
-              <p>
-                <b>Cost:</b> ৳{selected.cost}
-              </p>
-
-              <p>
-                <b>Condition:</b> {selected.condition}
-              </p>
-
-              <p>
-                <b>Status:</b> {selected.status}
-              </p>
-
-              <p className="full">
-                <b>Voucher No:</b> {selected.voucherNo || "—"}
-              </p>
-
-              <p className="full">
-                <b>Remarks:</b> {selected.remarks || "—"}
-              </p>
+              <p><b>Inventory No:</b> {selected.inventoryNo}</p>
+              <p><b>Category:</b> {selected.category}</p>
+              <p><b>Total Quantity:</b> {selected.quantity}</p>
+              <p><b>In Store:</b> {sb["In Store"]}</p>
+              <p><b>Issued:</b> {sb.Issued}</p>
+              <p><b>Repair:</b> {sb.Repair}</p>
+              <p><b>Damaged:</b> {sb.Damaged}</p>
+              <p><b>Buy Date:</b> {selected.buyDate || "—"}</p>
+              <p><b>Location:</b> {selected.location || "—"}</p>
+              <p><b>Cost:</b> ৳{selected.cost.toLocaleString("en-IN")}</p>
+              <p><b>Condition:</b> {selected.condition}</p>
+              <p><b>Status:</b> {selected.status}</p>
+              <p className="full"><b>Voucher No:</b> {selected.voucherNo || "—"}</p>
+              <p className="full"><b>Remarks:</b> {selected.remarks || "—"}</p>
             </div>
 
             <h3>Accountability Details</h3>
@@ -547,20 +408,12 @@ export default function InventoryPage() {
                 </thead>
 
                 <tbody>
-                  {(selected.allocations || []).map((allocation, index) => (
+                  {selected.allocations.map((allocation, index) => (
                     <tr key={allocation.id}>
                       <td>{index + 1}</td>
-
                       <td>
-                        <span
-                          className={`badge ${allocation.type
-                            .replaceAll(" ", "-")
-                            .toLowerCase()}`}
-                        >
-                          {allocation.type}
-                        </span>
+                        <span className={badgeClass(allocation.type)}>{allocation.type}</span>
                       </td>
-
                       <td>{allocation.qty}</td>
                       <td>{allocation.holder || "—"}</td>
                       <td>{allocation.location || "—"}</td>
@@ -570,11 +423,9 @@ export default function InventoryPage() {
                     </tr>
                   ))}
 
-                  {(!selected.allocations || selected.allocations.length === 0) && (
+                  {selected.allocations.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="empty">
-                        No accountability record found.
-                      </td>
+                      <td colSpan={8} className="empty">No accountability record found.</td>
                     </tr>
                   )}
                 </tbody>
@@ -599,23 +450,18 @@ export default function InventoryPage() {
             </div>
 
             <div className="modal-actions">
-              <button onClick={() => openTransactionModal("Issue", selected)}>
-                Issue
-              </button>
+              {MOVEMENTS.map((m) => (
+                <button
+                  key={m.type}
+                  onClick={() => openTransaction(m.type, selected)}
+                  disabled={sb[m.from] === 0}
+                  title={sb[m.from] === 0 ? EMPTY_HINT[m.from] : m.title}
+                >
+                  {m.button}
+                </button>
+              ))}
 
-              <button onClick={() => openTransactionModal("Return", selected)}>
-                Return
-              </button>
-
-              <button onClick={() => openTransactionModal("Repair", selected)}>
-                Repair
-              </button>
-
-              <button onClick={() => openTransactionModal("Damaged", selected)}>
-                Damaged
-              </button>
-
-              <button className="dark" onClick={() => setSelected(null)}>
+              <button className="dark" onClick={() => setSelectedId(null)}>
                 Close
               </button>
             </div>
@@ -628,30 +474,21 @@ export default function InventoryPage() {
           <div className="file-preview-modal" onClick={(e) => e.stopPropagation()}>
             <div className="file-preview-head">
               <h2>{filePreview.title}</h2>
-              <button onClick={() => setFilePreview(null)}>×</button>
+              <button onClick={() => setFilePreview(null)} aria-label="Close">×</button>
             </div>
 
             <div className="file-preview-body">
-              {filePreview.type === "image" ? (
-                <img
-                  src={filePreview.url}
-                  alt={filePreview.title}
-                  className="large-file-image"
-                />
+              {filePreview.image ? (
+                <img src={filePreview.url} alt={filePreview.title} className="large-file-image" />
               ) : (
-                <iframe
-                  src={filePreview.url}
-                  title={filePreview.title}
-                  className="large-file-frame"
-                />
+                <iframe src={filePreview.url} title={filePreview.title} className="large-file-frame" />
               )}
             </div>
 
             <div className="file-preview-actions">
-              <a href={filePreview.url} target="_blank">
+              <a href={filePreview.url} target="_blank" rel="noopener noreferrer">
                 Open in New Tab
               </a>
-
               <button className="dark" onClick={() => setFilePreview(null)}>
                 Close
               </button>
@@ -660,87 +497,71 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {txnForm && (
-        <div className="modal-bg" onClick={closeTransactionModal}>
-          <div className="txn-modal" onClick={(e) => e.stopPropagation()}>
+      {txn && txnRow && txnConfig && (
+        <div className="modal-bg" onClick={() => setTxn(null)}>
+          <div className="txn-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
-                <h2>{getTransactionTitle(txnForm.type)}</h2>
+                <h2>{txnConfig.title}</h2>
                 <p className="modal-subtitle">
-                  {txnForm.item.inventoryNo} — {txnForm.item.itemName}
+                  {txnRow.item.inventoryNo} — {txnRow.item.itemName}
                 </p>
               </div>
-
-              <button onClick={closeTransactionModal}>×</button>
+              <button onClick={() => setTxn(null)} aria-label="Close">×</button>
             </div>
 
             <div className="txn-form-body">
               <div className="transaction-info-box">
-                <div>
-                  <span>Total</span>
-                  <b>{txnForm.item.quantity}</b>
-                </div>
-
-                <div>
-                  <span>In Store</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "In Store")}</b>
-                </div>
-
-                <div>
-                  <span>Issued</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "Issued")}</b>
-                </div>
-
-                <div>
-                  <span>Repair</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "Repair")}</b>
-                </div>
+                <div><span>Total</span><b>{txnRow.item.quantity}</b></div>
+                <div><span>In Store</span><b>{txnRow.breakdown["In Store"]}</b></div>
+                <div><span>Issued</span><b>{txnRow.breakdown.Issued}</b></div>
+                <div><span>Repair</span><b>{txnRow.breakdown.Repair}</b></div>
               </div>
 
-              <p className="txn-help-text">{getTransactionNote(txnForm.type)}</p>
+              <p className="txn-help-text">{txnConfig.note}</p>
 
               <div className="form-grid two-field-form txn-form-grid">
                 <label>
                   Transaction Type
-                  <input value={txnForm.type} readOnly />
+                  <input value={txnConfig.title} readOnly />
                 </label>
 
                 <label>
-                  Quantity
+                  Quantity (max {txnRow.breakdown[txnConfig.from]})
                   <input
                     type="number"
-                    min="1"
-                    value={txnQty}
-                    onChange={(e) => setTxnQty(Number(e.target.value))}
+                    min={1}
+                    max={txnRow.breakdown[txnConfig.from]}
+                    value={txn.qty || ""}
+                    onChange={(e) => setTxn({ ...txn, qty: Number(e.target.value) })}
+                    autoFocus
                   />
                 </label>
 
-                {txnForm.type === "Issue" && (
+                {txn.type === "Issue" && (
                   <label className="full">
                     Issued To *
                     <input
-                      value={txnIssuedTo}
-                      onChange={(e) => setTxnIssuedTo(e.target.value)}
+                      value={txn.issuedTo}
+                      onChange={(e) => setTxn({ ...txn, issuedTo: e.target.value })}
                       placeholder="Snk A / Office / Section"
                     />
                   </label>
                 )}
 
-                {txnForm.type === "Return" && (
+                {txn.type === "Return" && (
                   <label className="full">
                     Returned From
                     <select
-                      value={txnIssuedTo}
-                      onChange={(e) => setTxnIssuedTo(e.target.value)}
+                      value={txn.issuedTo}
+                      onChange={(e) => setTxn({ ...txn, issuedTo: e.target.value })}
                     >
                       <option value="">Any issued holder</option>
-                      {(txnForm.item.allocations || [])
-                        .filter((allocation) => allocation.type === "Issued")
-                        .map((allocation) => (
-                          <option key={allocation.id} value={allocation.holder}>
-                            {allocation.holder} — Qty {allocation.qty}
-                          </option>
-                        ))}
+                      {getIssuedHolders(txnRow.item.allocations).map((h) => (
+                        <option key={h.holder} value={h.holder}>
+                          {h.holder} — Qty {h.qty}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 )}
@@ -749,16 +570,17 @@ export default function InventoryPage() {
                   Date
                   <input
                     type="date"
-                    value={txnDate}
-                    onChange={(e) => setTxnDate(e.target.value)}
+                    value={txn.date}
+                    max={today()}
+                    onChange={(e) => setTxn({ ...txn, date: e.target.value })}
                   />
                 </label>
 
                 <label>
                   Voucher / Note No
                   <input
-                    value={txnVoucherNo}
-                    onChange={(e) => setTxnVoucherNo(e.target.value)}
+                    value={txn.voucherNo}
+                    onChange={(e) => setTxn({ ...txn, voucherNo: e.target.value })}
                     placeholder="Issue voucher / return note / repair note"
                   />
                 </label>
@@ -766,8 +588,8 @@ export default function InventoryPage() {
                 <label className="full">
                   Remarks
                   <textarea
-                    value={txnRemarks}
-                    onChange={(e) => setTxnRemarks(e.target.value)}
+                    value={txn.remarks}
+                    onChange={(e) => setTxn({ ...txn, remarks: e.target.value })}
                     placeholder="Additional remarks"
                   />
                 </label>
@@ -775,17 +597,18 @@ export default function InventoryPage() {
             </div>
 
             <div className="modal-actions txn-submit-row">
-              <button className="dark" onClick={closeTransactionModal}>
+              <button className="dark" onClick={() => setTxn(null)}>
                 Cancel
               </button>
-
-              <button onClick={submitTransaction}>Submit {txnForm.type}</button>
+              <button onClick={submitTransaction} disabled={busy}>
+                {busy ? "Saving…" : `Submit ${txnConfig.button}`}
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {message && <div className="toast">{message}</div>}
+      {message && <div className="toast" role="status">{message}</div>}
     </section>
   );
 }
