@@ -1,7 +1,7 @@
 "use client";
 
 // Browser helpers: API calls with consistent error handling, uploads with
-// image compression, and a toast message hook.
+// image compression, and the toast message hook.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -74,38 +74,31 @@ export async function uploadFile(file: File | null, existingUrl: string) {
   return data.url;
 }
 
-export function useToast(duration = 3000) {
-  const [message, setMessage] = useState("");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  const show = useCallback(
-    (text: string) => {
-      clearTimeout(timer.current);
-      setMessage(text);
-      timer.current = setTimeout(() => setMessage(""), duration);
-    },
-    [duration]
-  );
-
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  return [message, show] as const;
-}
-
 export function errorText(err: unknown) {
   return err instanceof Error ? err.message : "Something went wrong.";
 }
 
-// Close modals with the Escape key.
-export function useEscape(onEscape: (() => void) | null) {
-  useEffect(() => {
-    if (!onEscape) return;
+export type ToastState = {
+  text: string;
+  kind: "success" | "error";
+  action?: { label: string; href: string };
+};
 
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onEscape();
-    };
+export function useToast() {
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onEscape]);
+  const show = useCallback(
+    (text: string, options: Partial<Omit<ToastState, "text">> = {}) => {
+      clearTimeout(timer.current);
+      setToast({ text, kind: options.kind || "success", action: options.action });
+      // Leave time to click the action link (e.g. "Print voucher").
+      timer.current = setTimeout(() => setToast(null), options.action ? 7000 : 3500);
+    },
+    []
+  );
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  return [toast, show] as const;
 }

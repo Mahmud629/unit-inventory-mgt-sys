@@ -95,6 +95,16 @@ export type DashboardData = {
     damaged: number;
   };
   recent: DashboardTransaction[];
+  issued: IssuedRow[];
+};
+
+export type IssuedRow = {
+  holder: string;
+  itemId: string;
+  itemName: string;
+  inventoryNo: string;
+  qty: number;
+  since: string;
 };
 
 export const emptyForm = {

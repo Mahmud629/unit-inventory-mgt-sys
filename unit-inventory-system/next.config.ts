@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   // Native module: keep it out of the server bundle.
   serverExternalPackages: ["better-sqlite3"],
 
+  async redirects() {
+    // The old Add / Edit / Remove page is now part of the register.
+    return [{ source: "/manage", destination: "/inventory", permanent: false }];
+  },
+
   async rewrites() {
     // Runs after public/ files are checked, so uploads that existed at build
     // time are served directly and newer ones go through the API route.

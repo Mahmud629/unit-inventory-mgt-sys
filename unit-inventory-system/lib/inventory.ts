@@ -1,5 +1,5 @@
 // Inventory rules shared by the server and the browser.
-import type { Allocation, Item, Status } from "@/lib/types";
+import type { Allocation, Item, MovementType, Status, TransactionType } from "@/lib/types";
 
 export const INVENTORY_PREFIX = "INV-5SIG";
 
@@ -87,6 +87,60 @@ export function searchText(item: Item) {
     .join(" ")
     .toLowerCase();
 }
+
+// Labels for each stock movement, shared by the register and the vouchers.
+export const MOVEMENTS: Record<
+  MovementType,
+  { button: string; title: string; note: string; from: Status; voucher: string; holderLabel: string }
+> = {
+  Issue: {
+    button: "Issue",
+    title: "Issue Item",
+    note: "Hand over items from the store to a person, office or section.",
+    from: "In Store",
+    voucher: "Issue Voucher",
+    holderLabel: "Issued to",
+  },
+  Return: {
+    button: "Return",
+    title: "Return to Store",
+    note: "Take issued items back into the store. Pick the holder, or leave it on any holder.",
+    from: "Issued",
+    voucher: "Receipt Voucher (Return to Store)",
+    holderLabel: "Returned by",
+  },
+  Repair: {
+    button: "Send to Repair",
+    title: "Send for Repair",
+    note: "Move items from the store to repair. Bring them back with Back from Repair.",
+    from: "In Store",
+    voucher: "Repair Voucher",
+    holderLabel: "Sent to",
+  },
+  Repaired: {
+    button: "Back from Repair",
+    title: "Back from Repair",
+    note: "Return repaired items to the store.",
+    from: "Repair",
+    voucher: "Receipt Voucher (Back from Repair)",
+    holderLabel: "Received from",
+  },
+  Damaged: {
+    button: "Mark Damaged",
+    title: "Mark as Damaged",
+    note: "Move unusable items out of the store into the damaged list.",
+    from: "In Store",
+    voucher: "Damage Report",
+    holderLabel: "Reported by",
+  },
+};
+
+export const VOUCHER_TITLE: Record<TransactionType, string> = {
+  Purchase: "Receipt Voucher (Purchase)",
+  ...Object.fromEntries(
+    Object.entries(MOVEMENTS).map(([type, m]) => [type, m.voucher])
+  ),
+} as Record<TransactionType, string>;
 
 // Today's date as YYYY-MM-DD in local time. (toISOString() is UTC, which is
 // still "yesterday" in Bangladesh between midnight and 6 AM.)

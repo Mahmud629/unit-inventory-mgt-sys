@@ -46,13 +46,30 @@ To restore, stop the app and copy the backup's `inventory.db` to `data\inventory
 (delete any `inventory.db-wal` and `inventory.db-shm` next to it). Then copy the
 backup's `uploads` folder to `public\uploads`.
 
+## Using it
+
+- **Dashboard** shows totals (click a card to see those items), **Who Holds What**
+  (every issued item and its holder), and recent activity.
+- **Inventory Register** is where all the work happens. Search or filter, then
+  click any row to open the item. From there you can **Issue**, **Return**,
+  **Send to Repair**, **Back from Repair**, **Mark Damaged**, **Edit** or **Delete**.
+  Use **+ Add Item** to register new property.
+- **Printing**: *Print* on the register prints the current (filtered) list on
+  A4 landscape with signature lines. Every history line in an item has
+  *Print voucher*, which prints an office copy and a holder copy on one A4 sheet.
+- **Export CSV** opens in Excel (Bangla text and ৳ included).
+- Press **Esc** to close the top dialog.
+
 ## Where things are
 
 | Path | What |
 | --- | --- |
 | `data/inventory.db` | The database (items, accountability, transaction history) |
 | `public/uploads/` | Uploaded vouchers, notesheets and photos |
-| `app/` | Pages (Dashboard, Inventory Register, Add/Edit/Remove) and API routes |
+| `app/page.tsx`, `app/inventory/` | Dashboard and Inventory Register pages |
+| `app/components/` | Dialogs: item details, add/edit form, issue/return form |
+| `app/print/` | Printable vouchers |
+| `app/api/` | Server API routes |
 | `lib/db.ts` | All database reads and writes |
 | `lib/inventory.ts` | Stock rules shared by server and browser |
 | `lib/validation.ts` | Checks on everything the server receives |

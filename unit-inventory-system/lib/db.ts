@@ -17,6 +17,7 @@ import {
   type Condition,
   type DashboardData,
   type DashboardTransaction,
+  type IssuedRow,
   type Item,
   type Status,
   type Transaction,
@@ -469,7 +470,21 @@ export function getDashboard(): DashboardData {
     })
   );
 
+  // Who currently holds what, one line per holder and item.
+  const issued = db
+    .prepare(
+      `SELECT a.holder AS holder, i.id AS itemId, i.item_name AS itemName,
+              i.inventory_no AS inventoryNo, SUM(a.qty) AS qty, MIN(a.date) AS since
+       FROM inventory_allocations a
+       JOIN inventory_items i ON i.id = a.item_id
+       WHERE a.type = 'Issued'
+       GROUP BY a.holder, i.id
+       ORDER BY a.holder COLLATE NOCASE, i.item_name COLLATE NOCASE`
+    )
+    .all() as IssuedRow[];
+
   return {
+    issued,
     stats: {
       lines: totals.lines,
       total: totals.total,
