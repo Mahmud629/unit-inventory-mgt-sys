@@ -59,6 +59,10 @@ backup's `uploads` folder to `public\uploads`.
   *Print voucher*, which prints an office copy and a holder copy on one A4 sheet.
 - **Export CSV** opens in Excel (Bangla text and ৳ included).
 - Press **Esc** to close the top dialog.
+- **বাংলা / English**: the button in the top bar (and on the login page) switches
+  the whole interface, printed vouchers and the register between English and
+  Bangla, with Bangla numerals. Each computer remembers its choice. Item names,
+  holders and remarks are shown exactly as they were typed.
 
 ## Where things are
 

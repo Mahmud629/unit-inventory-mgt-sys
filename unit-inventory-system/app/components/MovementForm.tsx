@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { errorText, sendJson } from "@/lib/client";
-import { getBreakdown, getIssuedHolders, localDate, MOVEMENTS } from "@/lib/inventory";
-import type { Item, MovementType } from "@/lib/types";
+import type { MsgKey } from "@/lib/i18n";
+import { getBreakdown, getIssuedHolders, localDate, MOVE_FROM } from "@/lib/inventory";
+import { STATUSES, type Item, type MovementType } from "@/lib/types";
+import { useI18n } from "./I18nProvider";
 import { Field, Modal } from "./ui";
 
 type Props = {
@@ -15,7 +17,9 @@ type Props = {
 };
 
 export default function MovementForm({ item, type, holders, onDone, onClose }: Props) {
-  const move = MOVEMENTS[type];
+  const { t, n, status } = useI18n();
+  const from = MOVE_FROM[type];
+  const label = (part: "button" | "title" | "note") => t(`mv_${type}_${part}` as MsgKey);
   const breakdown = getBreakdown(item.allocations);
   const issuedHolders = getIssuedHolders(item.allocations);
 
@@ -30,14 +34,14 @@ export default function MovementForm({ item, type, holders, onDone, onClose }: P
   const available =
     type === "Return" && holder
       ? issuedHolders.find((h) => h.holder === holder)?.qty || 0
-      : breakdown[move.from];
+      : breakdown[from];
 
   async function submit() {
     if (busy) return;
 
-    if (!Number.isInteger(qty) || qty < 1) return setError("Enter a whole quantity of at least 1.");
-    if (qty > available) return setError(`Only ${available} available.`);
-    if (type === "Issue" && !holder.trim()) return setError("Enter who it is issued to.");
+    if (!Number.isInteger(qty) || qty < 1) return setError(t("errQty"));
+    if (qty > available) return setError(t("errOnly", { n: available }));
+    if (type === "Issue" && !holder.trim()) return setError(t("errHolder"));
 
     setBusy(true);
     setError("");
@@ -61,32 +65,32 @@ export default function MovementForm({ item, type, holders, onDone, onClose }: P
   return (
     <Modal
       size="md"
-      title={move.title}
+      title={label("title")}
       subtitle={`${item.inventoryNo} — ${item.itemName}`}
       onClose={busy ? () => {} : onClose}
       footer={
         <>
           {error && <span className="form-error">{error}</span>}
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("cancel")}
           </button>
           <button type="button" className="btn" onClick={submit} disabled={busy || available === 0}>
-            {busy ? "Saving…" : `Confirm ${move.button}`}
+            {busy ? t("saving") : t("confirmMove", { action: label("button") })}
           </button>
         </>
       }
     >
       <div className="chips chips-4">
-        {(["In Store", "Issued", "Repair", "Damaged"] as const).map((s) => (
-          <div className="chip" key={s} style={s === move.from ? { borderColor: "var(--sky)" } : undefined}>
-            <span>{s}</span>
-            <b>{breakdown[s]}</b>
+        {STATUSES.map((s) => (
+          <div className="chip" key={s} style={s === from ? { borderColor: "var(--sky)" } : undefined}>
+            <span>{status(s)}</span>
+            <b>{n(breakdown[s])}</b>
           </div>
         ))}
       </div>
 
       <p className="note" style={{ margin: "14px 0" }}>
-        {move.note}
+        {label("note")}
       </p>
 
       <form
@@ -98,12 +102,15 @@ export default function MovementForm({ item, type, holders, onDone, onClose }: P
         noValidate
       >
         {type === "Issue" && (
-          <Field label="Issued to" required className="full" hint="Name / rank / office / section">
+          <Field label={t("issuedTo")} required className="full" hint={t("issuedToHint")}>
             <input
               value={holder}
-              onChange={(e) => setHolder(e.target.value)}
+              onChange={(e) => {
+                setHolder(e.target.value);
+                setError("");
+              }}
               list="holder-options"
-              placeholder="e.g. Snk Asif / Coy Office"
+              placeholder={t("issuedToPh")}
               autoFocus
             />
             <datalist id="holder-options">
@@ -115,19 +122,26 @@ export default function MovementForm({ item, type, holders, onDone, onClose }: P
         )}
 
         {type === "Return" && (
-          <Field label="Returned from" className="full">
-            <select value={holder} onChange={(e) => setHolder(e.target.value)} autoFocus>
-              <option value="">Any holder ({breakdown.Issued} issued)</option>
+          <Field label={t("returnedFrom")} className="full">
+            <select
+              value={holder}
+              onChange={(e) => {
+                setHolder(e.target.value);
+                setError("");
+              }}
+              autoFocus
+            >
+              <option value="">{t("anyHolder", { n: breakdown.Issued })}</option>
               {issuedHolders.map((h) => (
                 <option key={h.holder} value={h.holder}>
-                  {h.holder} — holds {h.qty}
+                  {t("holdsN", { holder: h.holder, n: h.qty })}
                 </option>
               ))}
             </select>
           </Field>
         )}
 
-        <Field label={`Quantity (max ${available})`} required>
+        <Field label={t("qtyMax", { n: available })} required>
           <div className="input-row">
             <input
               type="number"
@@ -135,34 +149,40 @@ export default function MovementForm({ item, type, holders, onDone, onClose }: P
               min={1}
               max={available}
               value={Number.isNaN(qty) ? "" : qty}
-              onChange={(e) => setQty(e.target.value === "" ? NaN : Number(e.target.value))}
+              onChange={(e) => {
+                setQty(e.target.value === "" ? NaN : Number(e.target.value));
+                setError("");
+              }}
               autoFocus={type !== "Issue" && type !== "Return"}
             />
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => setQty(available)}
+              onClick={() => {
+                setQty(available);
+                setError("");
+              }}
               disabled={available === 0}
             >
-              All
+              {t("all")}
             </button>
           </div>
         </Field>
 
-        <Field label="Date">
+        <Field label={t("date")}>
           <input type="date" value={date} max={localDate()} onChange={(e) => setDate(e.target.value)} />
         </Field>
 
-        <Field label="Voucher / note no" className="full">
+        <Field label={t("voucherNoteNo")} className="full">
           <input
             value={voucherNo}
             onChange={(e) => setVoucherNo(e.target.value)}
-            placeholder="Issue voucher / return note / repair note"
+            placeholder={t("voucherNotePh")}
           />
         </Field>
 
-        <Field label="Remarks" className="full">
-          <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Optional" />
+        <Field label={t("remarks")} className="full">
+          <textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={t("optional")} />
         </Field>
 
         <button type="submit" hidden />

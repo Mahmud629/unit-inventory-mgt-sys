@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ToastState } from "@/lib/client";
+import { useI18n } from "./I18nProvider";
 
 /* ---------- Modal ---------- */
 
@@ -21,6 +22,7 @@ type ModalProps = {
 };
 
 export function Modal({ title, subtitle, onClose, size = "md", footer, toolbar, children }: ModalProps) {
+  const { t } = useI18n();
   const id = useId();
   const closeRef = useRef(onClose);
   const downOnBackdrop = useRef(false);
@@ -68,7 +70,7 @@ export function Modal({ title, subtitle, onClose, size = "md", footer, toolbar, 
             <h2 id={`${id}-title`}>{title}</h2>
             {subtitle && <p>{subtitle}</p>}
           </div>
-          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+          <button type="button" className="modal-close" onClick={onClose} aria-label={t("close")}>
             ×
           </button>
         </div>
@@ -96,6 +98,7 @@ type ConfirmProps = {
 };
 
 export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm, onClose }: ConfirmProps) {
+  const { t } = useI18n();
   const [busy, setBusy] = useState(false);
 
   async function confirm() {
@@ -115,7 +118,7 @@ export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm,
       footer={
         <>
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("cancel")}
           </button>
           <button
             type="button"
@@ -124,7 +127,7 @@ export function ConfirmDialog({ title, message, confirmLabel, danger, onConfirm,
             disabled={busy}
             autoFocus
           >
-            {busy ? "Please wait…" : confirmLabel}
+            {busy ? t("pleaseWait") : confirmLabel}
           </button>
         </>
       }

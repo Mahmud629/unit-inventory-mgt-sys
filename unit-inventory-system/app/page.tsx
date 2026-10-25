@@ -3,25 +3,28 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "@/app/components/I18nProvider";
 import { api, errorText } from "@/lib/client";
+import type { MsgKey } from "@/lib/i18n";
 import { badgeClass } from "@/lib/inventory";
 import type { DashboardData } from "@/lib/types";
 
 const CARDS: {
   key: keyof DashboardData["stats"];
-  label: string;
+  label: MsgKey;
   href: string;
   className: string;
 }[] = [
-  { key: "total", label: "Total Items", href: "/inventory", className: "" },
-  { key: "store", label: "In Store", href: "/inventory?status=In+Store", className: "stat-store" },
-  { key: "issued", label: "Issued", href: "/inventory?status=Issued", className: "stat-issued" },
-  { key: "repair", label: "In Repair", href: "/inventory?status=Repair", className: "stat-repair" },
-  { key: "damaged", label: "Damaged", href: "/inventory?status=Damaged", className: "stat-damaged" },
+  { key: "total", label: "cardTotal", href: "/inventory", className: "" },
+  { key: "store", label: "cardStore", href: "/inventory?status=In+Store", className: "stat-store" },
+  { key: "issued", label: "cardIssued", href: "/inventory?status=Issued", className: "stat-issued" },
+  { key: "repair", label: "cardRepair", href: "/inventory?status=Repair", className: "stat-repair" },
+  { key: "damaged", label: "cardDamaged", href: "/inventory?status=Damaged", className: "stat-damaged" },
 ];
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { t, n, txn } = useI18n();
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
   const [holderSearch, setHolderSearch] = useState("");
@@ -41,24 +44,24 @@ export default function DashboardPage() {
 
   const holderCount = new Set((data?.issued || []).map((r) => r.holder)).size;
   const openItem = (id: string) => router.push(`/inventory?item=${id}`);
-  const placeholder = error || (data ? null : "Loading…");
+  const placeholder = error || (data ? null : t("loading"));
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <h2>Dashboard</h2>
+          <h2>{t("dashTitle")}</h2>
           <p>
-            Unit property at a glance
-            {data ? ` — ${data.stats.lines} item line${data.stats.lines === 1 ? "" : "s"}` : ""}.
+            {t("dashSub")}
+            {data ? ` — ${t("dashLines", { n: data.stats.lines })}` : ""}
           </p>
         </div>
         <div className="btn-group">
           <Link className="btn btn-ghost" href="/inventory">
-            Open Register
+            {t("openRegister")}
           </Link>
           <Link className="btn" href="/inventory?new=1">
-            + Add Item
+            {t("addItem")}
           </Link>
         </div>
       </div>
@@ -66,9 +69,9 @@ export default function DashboardPage() {
       <div className="stats">
         {CARDS.map((card) => (
           <Link key={card.key} href={card.href} className={`stat ${card.className}`}>
-            <span>{card.label}</span>
-            <b>{data ? data.stats[card.key] : "–"}</b>
-            <small>View items →</small>
+            <span>{t(card.label)}</span>
+            <b>{data ? n(data.stats[card.key]) : "–"}</b>
+            <small>{t("viewItems")}</small>
           </Link>
         ))}
       </div>
@@ -77,29 +80,27 @@ export default function DashboardPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <h3>Who Holds What</h3>
-              <p>
-                {data ? `${holderCount} holder${holderCount === 1 ? "" : "s"} with issued items` : "Issued items by holder"}
-              </p>
+              <h3>{t("whoHolds")}</h3>
+              <p>{data ? t("holdersCount", { n: holderCount }) : t("holdersHint")}</p>
             </div>
             <input
               className="input"
               style={{ maxWidth: 220 }}
               type="search"
-              placeholder="Find holder or item"
+              placeholder={t("findHolder")}
               value={holderSearch}
               onChange={(e) => setHolderSearch(e.target.value)}
-              aria-label="Find holder or item"
+              aria-label={t("findHolder")}
             />
           </div>
           <div className="table-wrap" style={{ maxHeight: 440, overflowY: "auto" }}>
             <table>
               <thead>
                 <tr>
-                  <th>Holder</th>
-                  <th>Item</th>
-                  <th className="num">Qty</th>
-                  <th>Since</th>
+                  <th>{t("colHolder")}</th>
+                  <th>{t("colItem")}</th>
+                  <th className="num">{t("colQty")}</th>
+                  <th>{t("colSince")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -109,14 +110,14 @@ export default function DashboardPage() {
                     <td>
                       {r.itemName} <span className="muted nowrap">({r.inventoryNo})</span>
                     </td>
-                    <td className="num">{r.qty}</td>
-                    <td className="nowrap">{r.since}</td>
+                    <td className="num">{n(r.qty)}</td>
+                    <td className="nowrap">{n(r.since)}</td>
                   </tr>
                 ))}
                 {issued.length === 0 && (
                   <tr>
                     <td colSpan={4} className="empty">
-                      {placeholder || (holderSearch ? "No match." : "Nothing is issued right now — everything is in store.")}
+                      {placeholder || (holderSearch ? t("noMatch") : t("nothingIssued"))}
                     </td>
                   </tr>
                 )}
@@ -128,39 +129,39 @@ export default function DashboardPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <h3>Recent Activity</h3>
-              <p>Last 10 purchases, issues, returns and repairs</p>
+              <h3>{t("recentTitle")}</h3>
+              <p>{t("recentSub")}</p>
             </div>
           </div>
           <div className="table-wrap" style={{ maxHeight: 440, overflowY: "auto" }}>
             <table>
               <thead>
                 <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Item</th>
-                  <th className="num">Qty</th>
-                  <th>Holder</th>
+                  <th>{t("colDate")}</th>
+                  <th>{t("colType")}</th>
+                  <th>{t("colItem")}</th>
+                  <th className="num">{t("colQty")}</th>
+                  <th>{t("colHolder")}</th>
                 </tr>
               </thead>
               <tbody>
-                {(data?.recent || []).map((t) => (
-                  <tr key={t.id} className="clickable" onClick={() => openItem(t.itemId)}>
-                    <td className="nowrap">{t.date || "—"}</td>
+                {(data?.recent || []).map((r) => (
+                  <tr key={r.id} className="clickable" onClick={() => openItem(r.itemId)}>
+                    <td className="nowrap">{r.date ? n(r.date) : "—"}</td>
                     <td>
-                      <span className={badgeClass(t.type)}>{t.type}</span>
+                      <span className={badgeClass(r.type)}>{txn(r.type)}</span>
                     </td>
                     <td>
-                      {t.itemName} <span className="muted nowrap">({t.inventoryNo})</span>
+                      {r.itemName} <span className="muted nowrap">({r.inventoryNo})</span>
                     </td>
-                    <td className="num">{t.qty}</td>
-                    <td>{t.issuedTo || <span className="muted">—</span>}</td>
+                    <td className="num">{n(r.qty)}</td>
+                    <td>{r.issuedTo || <span className="muted">—</span>}</td>
                   </tr>
                 ))}
                 {data?.recent.length === 0 && (
                   <tr>
                     <td colSpan={5} className="empty">
-                      No activity yet.
+                      {t("noActivity")}
                     </td>
                   </tr>
                 )}

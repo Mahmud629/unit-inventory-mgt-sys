@@ -3,7 +3,9 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useI18n } from "@/app/components/I18nProvider";
 import { Field } from "@/app/components/ui";
+import { localizeMessage } from "@/lib/i18n";
 
 // Only allow redirects back into this app.
 function safeNext() {
@@ -13,6 +15,7 @@ function safeNext() {
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t, lang, setLang } = useI18n();
 
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
@@ -35,7 +38,7 @@ export default function LoginPage() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        setMessage(data.message || "Login failed.");
+        setMessage(data.message ? localizeMessage(data.message, lang) : t("loginFailed"));
         setLoading(false);
         return;
       }
@@ -43,7 +46,7 @@ export default function LoginPage() {
       router.replace(safeNext());
       router.refresh();
     } catch {
-      setMessage("Cannot reach the server. Check the network and try again.");
+      setMessage(t("cannotReach"));
       setLoading(false);
     }
   }
@@ -51,6 +54,17 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card">
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -8 }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setLang(lang === "en" ? "bn" : "en")}
+            title={t("langTitle")}
+          >
+            {t("langButton")}
+          </button>
+        </div>
+
         <Image
           src="/logo.png"
           alt="5 Sig Bn — UIMS, Unit Inventory Management System"
@@ -59,10 +73,10 @@ export default function LoginPage() {
           className="login-logo"
           priority
         />
-        <p className="sub">5 Signal Battalion · Please log in</p>
+        <p className="sub">{t("loginPrompt")}</p>
 
         <form onSubmit={handleLogin} className="login-form form form-single">
-          <Field label="Username">
+          <Field label={t("username")}>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -71,7 +85,7 @@ export default function LoginPage() {
             />
           </Field>
 
-          <Field label="Password">
+          <Field label={t("password")}>
             <div className="input-row">
               <input
                 type={showPassword ? "text" : "password"}
@@ -85,9 +99,9 @@ export default function LoginPage() {
                 type="button"
                 className="btn btn-ghost"
                 onClick={() => setShowPassword((v) => !v)}
-                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-label={showPassword ? t("hidePassword") : t("showPassword")}
               >
-                {showPassword ? "Hide" : "Show"}
+                {showPassword ? t("hide") : t("show")}
               </button>
             </div>
           </Field>
@@ -99,11 +113,11 @@ export default function LoginPage() {
           )}
 
           <button type="submit" className="btn" disabled={loading}>
-            {loading ? "Logging in…" : "Login"}
+            {loading ? t("loggingIn") : t("login")}
           </button>
         </form>
 
-        <p className="login-note">Local LAN access only</p>
+        <p className="login-note">{t("lanOnly")}</p>
       </section>
     </main>
   );

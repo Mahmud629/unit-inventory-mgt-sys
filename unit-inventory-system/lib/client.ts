@@ -3,19 +3,26 @@
 // Browser helpers: API calls with consistent error handling, uploads with
 // image compression, and the toast message hook.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isLang, localizeMessage } from "@/lib/i18n";
+
+// Server messages are English; show them in the language the page is in.
+function localize(text: string) {
+  const lang = typeof document === "undefined" ? "en" : document.documentElement.lang;
+  return localizeMessage(text, isLang(lang) ? lang : "en");
+}
 
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: "no-store", ...init });
 
   if (res.status === 401) {
     window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
-    throw new Error("Session expired. Please log in again.");
+    throw new Error(localize("Session expired. Please log in again."));
   }
 
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new Error((data as { message?: string }).message || "Request failed.");
+    throw new Error(localize((data as { message?: string }).message || "Request failed."));
   }
 
   return data as T;
@@ -75,7 +82,7 @@ export async function uploadFile(file: File | null, existingUrl: string) {
 }
 
 export function errorText(err: unknown) {
-  return err instanceof Error ? err.message : "Something went wrong.";
+  return err instanceof Error ? err.message : localize("Something went wrong.");
 }
 
 export type ToastState = {

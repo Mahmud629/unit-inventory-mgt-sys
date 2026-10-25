@@ -4,14 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-
-const NAV = [
-  { href: "/", label: "Dashboard" },
-  { href: "/inventory", label: "Inventory Register" },
-];
+import { useI18n } from "./I18nProvider";
 
 // Own component so its updates re-render only the clock.
 function Clock() {
+  const { locale } = useI18n();
   const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -26,10 +23,10 @@ function Clock() {
 
   return (
     <div className="clock" aria-hidden>
-      <span>{now ? now.toLocaleDateString("en-GB", { weekday: "long" }) : " "}</span>
+      <span>{now ? now.toLocaleDateString(locale, { weekday: "long" }) : " "}</span>
       <b>
         {now
-          ? now.toLocaleString("en-GB", {
+          ? now.toLocaleString(locale, {
               day: "2-digit",
               month: "short",
               year: "numeric",
@@ -63,6 +60,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const theme = useTheme();
+  const { t, lang, setLang } = useI18n();
 
   // Login and print pages have no header or footer.
   if (pathname === "/login" || pathname.startsWith("/print")) {
@@ -85,22 +83,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     router.refresh();
   }
 
+  const nav = [
+    { href: "/", label: t("navDashboard") },
+    { href: "/inventory", label: t("navRegister") },
+  ];
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
-  const themeLabel = theme === "light" ? "Switch to dark mode" : "Switch to light mode";
+  const themeLabel = theme === "light" ? t("darkMode") : t("lightMode");
 
   return (
     <div className="app">
       <header className="topbar">
-        <Link href="/" className="brand" aria-label="Dashboard">
+        <Link href="/" className="brand" aria-label={t("navDashboard")}>
           <Image src="/logo-mark.png" alt="5 Sig Bn UIMS" width={62} height={62} priority className="brand-logo" />
           <div>
-            <h1>5 Signal Battalion</h1>
-            <p>Unit Inventory</p>
+            <h1>{t("appName")}</h1>
+            <p>{t("appSub")}</p>
           </div>
         </Link>
 
         <nav className="nav" aria-label="Main">
-          {NAV.map((link) => (
+          {nav.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -114,11 +116,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="topbar-tools">
           <Clock />
+          <button
+            type="button"
+            className="lang-btn"
+            onClick={() => setLang(lang === "en" ? "bn" : "en")}
+            title={t("langTitle")}
+            lang={lang === "en" ? "bn" : "en"}
+          >
+            {t("langButton")}
+          </button>
           <button type="button" className="icon-btn" onClick={toggleTheme} title={themeLabel} aria-label={themeLabel}>
             <span suppressHydrationWarning>{theme === "light" ? "🌙" : "☀️"}</span>
           </button>
           <button type="button" className="logout-btn" onClick={logout}>
-            Logout
+            {t("logout")}
           </button>
         </div>
       </header>
@@ -126,8 +137,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <main className="app-main">{children}</main>
 
       <footer className="footer">
-        <span suppressHydrationWarning>© {new Date().getFullYear()} 5 Signal Battalion · Unit Property Management System</span>
-        <span>Courtesy: BA 11108 Capt Asif Mahmud, Sigs</span>
+        <span suppressHydrationWarning>{t("footerCopy", { year: new Date().getFullYear() })}</span>
+        <span>{t("footerCourtesy")}</span>
       </footer>
     </div>
   );

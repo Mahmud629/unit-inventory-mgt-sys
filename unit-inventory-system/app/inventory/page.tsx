@@ -6,11 +6,13 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { useI18n } from "@/app/components/I18nProvider";
 import ItemDetail from "@/app/components/ItemDetail";
 import ItemForm from "@/app/components/ItemForm";
 import MovementForm from "@/app/components/MovementForm";
 import { ConfirmDialog, Modal, Toast } from "@/app/components/ui";
 import { api, errorText, useToast } from "@/lib/client";
+import type { MsgKey } from "@/lib/i18n";
 import {
   badgeClass,
   getBreakdown,
@@ -24,20 +26,7 @@ import { CATEGORIES, STATUSES, type MovementType, type Status } from "@/lib/type
 
 type Preview = { title: string; url: string };
 
-function movementMessage(type: MovementType, qty: number, holder: string) {
-  switch (type) {
-    case "Issue":
-      return `Issued ${qty} to ${holder}.`;
-    case "Return":
-      return `${qty} returned to store${holder ? ` from ${holder}` : ""}.`;
-    case "Repair":
-      return `${qty} sent for repair.`;
-    case "Repaired":
-      return `${qty} back in store from repair.`;
-    case "Damaged":
-      return `${qty} marked as damaged.`;
-  }
-}
+const statusKey = (s: string) => s.replace(/\s+/g, "");
 
 function csvCell(value: unknown) {
   return `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -47,6 +36,7 @@ function InventoryRegister() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  const { t, n, status: statusText, condition: conditionText, category: categoryText, locale } = useI18n();
   const { items, loading, error, upsert, remove } = useItems();
   const [toast, showToast] = useToast();
 
@@ -75,9 +65,17 @@ function InventoryRegister() {
   // Typing stays smooth; filtering catches up a moment later.
   const deferredSearch = useDeferredValue(search);
 
+  // Search also matches the translated labels (e.g. "আসবাবপত্র" finds Furniture).
   const rows = useMemo(
-    () => items.map((item) => ({ item, b: getBreakdown(item.allocations), text: searchText(item) })),
-    [items]
+    () =>
+      items.map((item) => ({
+        item,
+        b: getBreakdown(item.allocations),
+        text: `${searchText(item)} ${categoryText(item.category)} ${statusText(item.status)} ${conditionText(
+          item.condition
+        )}`.toLowerCase(),
+      })),
+    [items, categoryText, statusText, conditionText]
   );
 
   const filtered = useMemo(() => {
@@ -100,13 +98,18 @@ function InventoryRegister() {
     const names = new Set<string>();
     for (const item of items) {
       for (const h of getIssuedHolders(item.allocations)) names.add(h.holder);
-      for (const t of item.transactions) if (t.type === "Issue" && t.issuedTo) names.add(t.issuedTo);
+      for (const tx of item.transactions) if (tx.type === "Issue" && tx.issuedTo) names.add(tx.issuedTo);
     }
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [items]);
 
   const selected = items.find((i) => i.id === selectedId) || null;
   const filtersOn = Boolean(search || category || status);
+
+  function movementMessage(type: MovementType, qty: number, holder: string) {
+    if (type === "Return") return holder ? t("msg_ReturnFrom", { qty, holder }) : t("msg_Return", { qty });
+    return t(`msg_${type}` as MsgKey, { qty, holder });
+  }
 
   function openItem(id: string) {
     setSelectedId(id);
@@ -134,7 +137,7 @@ function InventoryRegister() {
       remove(selected.id);
       setConfirmDelete(false);
       closeItem();
-      showToast(`${selected.inventoryNo} deleted.`);
+      showToast(t("deleted", { no: selected.inventoryNo }));
     } catch (err) {
       showToast(errorText(err), { kind: "error" });
     }
@@ -145,15 +148,19 @@ function InventoryRegister() {
   }
 
   function exportCSV() {
-    const header = [
-      "Inventory No", "Item", "Category", "Total", "In Store", "Issued", "Repair", "Damaged",
-      "Held By", "Voucher No", "Buying Date", "Cost", "Location", "Condition", "Status", "Remarks",
-    ];
+    const header = (
+      [
+        "colInvNo", "colItem", "colCategory", "colTotal", "colInStore", "colIssued", "colRepair",
+        "colDamaged", "colHeldBy", "colVoucherNo", "colBuyDate", "colCost", "colLocation",
+        "colCondition", "colStatus", "colRemarks",
+      ] as MsgKey[]
+    ).map((k) => t(k));
 
+    // Numbers stay as plain digits so Excel can add them up.
     const lines = filtered.map(({ item: x, b }) => [
-      x.inventoryNo, x.itemName, x.category, x.quantity, b["In Store"], b.Issued, b.Repair, b.Damaged,
-      getIssuedHolders(x.allocations).map((h) => `${h.holder} (${h.qty})`).join("; "),
-      x.voucherNo, x.buyDate, x.cost, x.location, x.condition, x.status, x.remarks,
+      x.inventoryNo, x.itemName, categoryText(x.category), x.quantity, b["In Store"], b.Issued, b.Repair,
+      b.Damaged, getIssuedHolders(x.allocations).map((h) => `${h.holder} (${h.qty})`).join("; "),
+      x.voucherNo, x.buyDate, x.cost, x.location, conditionText(x.condition), statusText(x.status), x.remarks,
     ]);
 
     // The BOM makes Excel read Bangla text and ৳ correctly.
@@ -161,36 +168,38 @@ function InventoryRegister() {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = `inventory-register-${localDate()}.csv`;
+    a.download = `${t("csvFile")}-${localDate()}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   const filterSummary = [
-    category && `Category: ${category}`,
-    status && `Status: ${status}`,
-    search && `Search: "${search}"`,
+    category && t("filterCategory", { v: categoryText(category) }),
+    status && t("filterStatus", { v: statusText(status) }),
+    search && t("filterSearch", { v: search }),
   ]
     .filter(Boolean)
     .join(" · ");
+
+  const pieces = filtered.reduce((s, r) => s + r.item.quantity, 0);
 
   return (
     <div className="page">
       <div className="page-head no-print">
         <div>
-          <h2>Inventory Register</h2>
-          <p>Click any item to see where it is, issue it, take it back, or edit it.</p>
+          <h2>{t("regTitle")}</h2>
+          <p>{t("regSub")}</p>
         </div>
         <Link className="btn" href="/inventory?new=1" replace scroll={false}>
-          + Add Item
+          {t("addItem")}
         </Link>
       </div>
 
       <div className="print-only print-title">
         <img src="/logo-mark.png" alt="" className="print-logo" />
-        <h1>5 Signal Battalion — Unit Inventory Register</h1>
-        <p>
-          Printed {new Date().toLocaleString("en-GB")} · {filtered.length} item lines
+        <h1>{t("printTitle")}</h1>
+        <p suppressHydrationWarning>
+          {t("printed", { date: new Date().toLocaleString(locale), n: filtered.length })}
           {filterSummary ? ` · ${filterSummary}` : ""}
         </p>
       </div>
@@ -202,34 +211,36 @@ function InventoryRegister() {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search item, inv no, holder, voucher, location…"
-            aria-label="Search"
+            placeholder={t("searchPh")}
+            aria-label={t("search")}
           />
-          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Category">
-            <option value="">All categories</option>
+          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t("colCategory")}>
+            <option value="">{t("allCategories")}</option>
             {categories.map((c) => (
-              <option key={c}>{c}</option>
+              <option key={c} value={c}>
+                {categoryText(c)}
+              </option>
             ))}
           </select>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
-            <option value="">Any status</option>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label={t("colStatus")}>
+            <option value="">{t("anyStatus")}</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
-                Has {s === "In Store" ? "stock in store" : s.toLowerCase()}
+                {t(`has_${statusKey(s)}` as MsgKey)}
               </option>
             ))}
           </select>
           {filtersOn && (
             <button type="button" className="btn btn-ghost" onClick={clearFilters}>
-              Clear
+              {t("clear")}
             </button>
           )}
           <div className="toolbar-end">
             <button type="button" className="btn btn-ghost" onClick={() => window.print()} disabled={!filtered.length}>
-              Print
+              {t("print")}
             </button>
             <button type="button" className="btn btn-ghost" onClick={exportCSV} disabled={!filtered.length}>
-              Export CSV
+              {t("exportCsv")}
             </button>
           </div>
         </div>
@@ -238,22 +249,22 @@ function InventoryRegister() {
           <table className="table-register">
             <thead>
               <tr>
-                <th className="num">Ser</th>
-                <th>Item</th>
-                <th>Category</th>
-                <th className="num">Total</th>
-                <th className="num">In Store</th>
-                <th className="num">Issued</th>
-                <th className="num">Repair</th>
-                <th className="num">Damaged</th>
-                <th>Status</th>
-                <th>Held by</th>
+                <th className="num">{t("colSer")}</th>
+                <th>{t("colItem")}</th>
+                <th>{t("colCategory")}</th>
+                <th className="num">{t("colTotal")}</th>
+                <th className="num">{t("colInStore")}</th>
+                <th className="num">{t("colIssued")}</th>
+                <th className="num">{t("colRepair")}</th>
+                <th className="num">{t("colDamaged")}</th>
+                <th>{t("colStatus")}</th>
+                <th>{t("colHeldBy")}</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(({ item, b }, index) => (
                 <tr key={item.id} className="clickable" onClick={() => openItem(item.id)}>
-                  <td className="num hide-sm">{index + 1}</td>
+                  <td className="num hide-sm">{n(index + 1)}</td>
                   <td className="cell-main">
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {item.productPhotoUrl ? (
@@ -283,16 +294,21 @@ function InventoryRegister() {
                       </div>
                     </div>
                   </td>
-                  <td data-label="Category">{item.category}</td>
-                  <td data-label="Total" className="num">{item.quantity}</td>
-                  <td data-label="In Store" className={`num ${b["In Store"] ? "" : "zero"}`}>{b["In Store"]}</td>
-                  <td data-label="Issued" className={`num ${b.Issued ? "" : "zero"}`}>{b.Issued}</td>
-                  <td data-label="Repair" className={`num ${b.Repair ? "" : "zero"}`}>{b.Repair}</td>
-                  <td data-label="Damaged" className={`num ${b.Damaged ? "" : "zero"}`}>{b.Damaged}</td>
-                  <td data-label="Status">
-                    <span className={badgeClass(item.status)}>{item.status}</span>
+                  <td data-label={t("colCategory")}>{categoryText(item.category)}</td>
+                  <td data-label={t("colTotal")} className="num">{n(item.quantity)}</td>
+                  {[b["In Store"], b.Issued, b.Repair, b.Damaged].map((v, i) => (
+                    <td
+                      key={i}
+                      data-label={t((["colInStore", "colIssued", "colRepair", "colDamaged"] as MsgKey[])[i])}
+                      className={`num ${v ? "" : "zero"}`}
+                    >
+                      {n(v)}
+                    </td>
+                  ))}
+                  <td data-label={t("colStatus")}>
+                    <span className={badgeClass(item.status)}>{statusText(item.status)}</span>
                   </td>
-                  <td data-label="Held by" className="wrap">
+                  <td data-label={t("colHeldBy")} className="wrap">
                     {item.issuedTo || <span className="muted">—</span>}
                   </td>
                 </tr>
@@ -302,21 +318,21 @@ function InventoryRegister() {
                 <tr>
                   <td colSpan={10} className="empty">
                     {loading ? (
-                      "Loading…"
+                      t("loading")
                     ) : error ? (
                       error
                     ) : items.length === 0 ? (
                       <>
-                        No items yet.{" "}
+                        {t("noItems")}{" "}
                         <Link href="/inventory?new=1" replace scroll={false}>
-                          Add the first item
+                          {t("addFirst")}
                         </Link>
                       </>
                     ) : (
                       <>
-                        Nothing matches these filters.{" "}
+                        {t("noFilterMatch")}{" "}
                         <button type="button" className="btn btn-sm btn-ghost" onClick={clearFilters}>
-                          Clear filters
+                          {t("clearFilters")}
                         </button>
                       </>
                     )}
@@ -329,16 +345,15 @@ function InventoryRegister() {
 
         {!loading && items.length > 0 && (
           <div className="table-foot no-print">
-            Showing {filtered.length} of {items.length} item lines ·{" "}
-            {filtered.reduce((s, r) => s + r.item.quantity, 0)} pieces
+            {t("showing", { shown: filtered.length, total: items.length, pieces })}
           </div>
         )}
       </section>
 
       <div className="print-only signatures">
-        <div>Prepared by (QM Store)</div>
-        <div>Checked by</div>
-        <div>Countersigned (Adjt / OC)</div>
+        <div>{t("sigPrepared")}</div>
+        <div>{t("sigChecked")}</div>
+        <div>{t("sigCounter")}</div>
       </div>
 
       {selected && (
@@ -363,7 +378,7 @@ function InventoryRegister() {
             setMovement(null);
             const txn = updated.transactions[0];
             showToast(movementMessage(movement, txn?.qty || 0, txn?.issuedTo || ""), {
-              action: txn ? { label: "Print voucher", href: `/print/voucher/${updated.id}/${txn.id}` } : undefined,
+              action: txn ? { label: t("printVoucher"), href: `/print/voucher/${updated.id}/${txn.id}` } : undefined,
             });
           }}
         />
@@ -378,10 +393,10 @@ function InventoryRegister() {
             upsert(saved);
             if (created) {
               closeAdd();
-              showToast(`${saved.inventoryNo} added to the register.`);
+              showToast(t("added", { no: saved.inventoryNo }));
             } else {
               setEditing(false);
-              showToast("Changes saved.");
+              showToast(t("changesSaved"));
             }
           }}
         />
@@ -389,15 +404,15 @@ function InventoryRegister() {
 
       {selected && confirmDelete && (
         <ConfirmDialog
-          title="Delete item?"
+          title={t("deleteTitle")}
           danger
-          confirmLabel="Delete permanently"
+          confirmLabel={t("deletePermanently")}
           message={
             <p>
               <b>
                 {selected.inventoryNo} — {selected.itemName}
               </b>{" "}
-              and its complete history will be removed. This cannot be undone.
+              {t("deleteMsg")}
             </p>
           }
           onConfirm={deleteSelected}
@@ -413,10 +428,10 @@ function InventoryRegister() {
           footer={
             <>
               <a className="btn btn-ghost" href={preview.url} target="_blank" rel="noopener noreferrer">
-                Open in new tab
+                {t("openNewTab")}
               </a>
               <button type="button" className="btn btn-dark" onClick={() => setPreview(null)}>
-                Close
+                {t("close")}
               </button>
             </>
           }
@@ -434,9 +449,14 @@ function InventoryRegister() {
   );
 }
 
+function Fallback() {
+  const { t } = useI18n();
+  return <div className="page">{t("loading")}</div>;
+}
+
 export default function InventoryPage() {
   return (
-    <Suspense fallback={<div className="page">Loading…</div>}>
+    <Suspense fallback={<Fallback />}>
       <InventoryRegister />
     </Suspense>
   );

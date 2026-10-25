@@ -13,6 +13,7 @@ import {
   type FormState,
   type Item,
 } from "@/lib/types";
+import { useI18n } from "./I18nProvider";
 import { Field, Modal } from "./ui";
 
 type FileKey = "voucher" | "notesheet" | "photo";
@@ -58,6 +59,7 @@ function FilePicker({
   accept: string;
   onChange: (file: File | null) => void;
 }) {
+  const { t, n } = useI18n();
   const [preview, setPreview] = useState("");
 
   useEffect(() => {
@@ -80,16 +82,16 @@ function FilePicker({
         <div className="file-field">
           {preview && <img src={preview} alt="" />}
           <span>
-            New file: <b>{file.name}</b> ({Math.ceil(file.size / 1024)} KB)
+            {t("newFile")} <b>{file.name}</b> ({n(Math.ceil(file.size / 1024))} KB)
           </span>
         </div>
       ) : currentUrl ? (
         <div className="file-field">
           {isImage && <img src={currentUrl} alt="" />}
           <span>
-            Current file kept.{" "}
+            {t("currentKept")}{" "}
             <a href={currentUrl} target="_blank" rel="noopener noreferrer">
-              Open
+              {t("open")}
             </a>
           </span>
         </div>
@@ -99,6 +101,7 @@ function FilePicker({
 }
 
 export default function ItemForm({ item, items, onSaved, onClose }: Props) {
+  const { t, status: statusText, condition: conditionText, category: categoryText } = useI18n();
   const editing = Boolean(item);
   const [form, setForm] = useState<FormState>(() =>
     item ? toForm(item) : { ...emptyForm, buyDate: localDate() }
@@ -136,14 +139,14 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
 
   function validate(): Errors {
     const e: Errors = {};
-    if (!form.itemName.trim()) e.itemName = "Enter the item name.";
-    if (!Number.isInteger(form.quantity) || form.quantity < 1) e.quantity = "Whole number, at least 1.";
-    if (!form.buyDate) e.buyDate = "Choose the buying date.";
-    if (Number.isNaN(form.cost) || form.cost < 0) e.cost = "Enter a valid cost (0 or more).";
-    if (!form.voucherNo.trim()) e.voucherNo = "Enter the voucher number.";
-    if (!form.voucherUrl && !files.voucher) e.voucher = "Attach the voucher (PDF or photo).";
+    if (!form.itemName.trim()) e.itemName = t("errItemName");
+    if (!Number.isInteger(form.quantity) || form.quantity < 1) e.quantity = t("errQtyWhole");
+    if (!form.buyDate) e.buyDate = t("errBuyDate");
+    if (Number.isNaN(form.cost) || form.cost < 0) e.cost = t("errCost");
+    if (!form.voucherNo.trim()) e.voucherNo = t("errVoucherNo");
+    if (!form.voucherUrl && !files.voucher) e.voucher = t("errVoucherFile");
     if (!editing && form.status === "Issued" && !form.issuedTo.trim()) {
-      e.issuedTo = "Who is it issued to?";
+      e.issuedTo = t("errIssuedTo");
     }
     return e;
   }
@@ -187,7 +190,7 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
   return (
     <Modal
       size="lg"
-      title={editing ? "Edit Item" : "Add New Item"}
+      title={editing ? t("editItem") : t("addNewItem")}
       subtitle={
         editing ? (
           <>
@@ -195,7 +198,7 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           </>
         ) : (
           <>
-            Will be saved as <b>{nextNo}</b>
+            {t("willBeSaved")} <b>{nextNo}</b>
           </>
         )
       }
@@ -204,10 +207,10 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
         <>
           {serverError && <span className="form-error">{serverError}</span>}
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t("cancel")}
           </button>
           <button type="button" className="btn" onClick={save} disabled={busy}>
-            {busy ? "Saving…" : editing ? "Save Changes" : "Save Item"}
+            {busy ? t("saving") : editing ? t("saveChanges") : t("saveItem")}
           </button>
         </>
       }
@@ -220,31 +223,33 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
         }}
         noValidate
       >
-        <div className="form-section">Item</div>
+        <div className="form-section">{t("secItem")}</div>
 
-        <Field label="Item name" required error={errors.itemName}>
+        <Field label={t("itemName")} required error={errors.itemName}>
           <input
             value={form.itemName}
             onChange={(e) => set("itemName", e.target.value)}
-            placeholder="e.g. Office Table"
+            placeholder={t("itemNamePh")}
             maxLength={200}
             autoFocus
           />
         </Field>
 
-        <Field label="Category" required>
+        <Field label={t("category")} required>
           <select value={form.category} onChange={(e) => set("category", e.target.value)}>
             {categories.map((c) => (
-              <option key={c}>{c}</option>
+              <option key={c} value={c}>
+                {categoryText(c)}
+              </option>
             ))}
           </select>
         </Field>
 
         <Field
-          label="Quantity"
+          label={t("quantity")}
           required
           error={errors.quantity}
-          hint={editing ? "Increasing adds to store; decreasing takes from store." : undefined}
+          hint={editing ? t("qtyEditHint") : undefined}
         >
           <input
             type="number"
@@ -256,20 +261,22 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Condition" required>
+        <Field label={t("condition")} required>
           <select
             value={form.condition}
             onChange={(e) => set("condition", e.target.value as FormState["condition"])}
           >
             {CONDITIONS.map((c) => (
-              <option key={c}>{c}</option>
+              <option key={c} value={c}>
+                {conditionText(c)}
+              </option>
             ))}
           </select>
         </Field>
 
-        <div className="form-section">Purchase</div>
+        <div className="form-section">{t("secPurchase")}</div>
 
-        <Field label="Buying date" required error={errors.buyDate}>
+        <Field label={t("buyDate")} required error={errors.buyDate}>
           <input
             type="date"
             value={form.buyDate}
@@ -278,7 +285,7 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Cost (৳)" required error={errors.cost}>
+        <Field label={t("cost")} required error={errors.cost}>
           <input
             type="number"
             inputMode="decimal"
@@ -288,19 +295,19 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Voucher no" required error={errors.voucherNo}>
+        <Field label={t("voucherNo")} required error={errors.voucherNo}>
           <input
             value={form.voucherNo}
             onChange={(e) => set("voucherNo", e.target.value)}
-            placeholder="e.g. CRV 112"
+            placeholder={t("voucherNoPh")}
           />
         </Field>
 
-        <Field label="Location">
+        <Field label={t("location")}>
           <input
             value={form.location}
             onChange={(e) => set("location", e.target.value)}
-            placeholder="e.g. QM Store"
+            placeholder={t("locationPh")}
             list="location-options"
           />
           <datalist id="location-options">
@@ -312,29 +319,31 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
 
         {!editing && (
           <>
-            <div className="form-section">Initial status</div>
+            <div className="form-section">{t("secInitial")}</div>
 
-            <Field label="Status" required>
+            <Field label={t("status")} required>
               <select
                 value={form.status}
                 onChange={(e) => set("status", e.target.value as FormState["status"])}
               >
                 {STATUSES.map((s) => (
-                  <option key={s}>{s}</option>
+                  <option key={s} value={s}>
+                    {statusText(s)}
+                  </option>
                 ))}
               </select>
             </Field>
 
             {form.status === "Issued" ? (
               <>
-                <Field label="Issued to" required error={errors.issuedTo}>
+                <Field label={t("issuedTo")} required error={errors.issuedTo}>
                   <input
                     value={form.issuedTo}
                     onChange={(e) => set("issuedTo", e.target.value)}
-                    placeholder="Name / Rank / Office / Section"
+                    placeholder={t("issuedToHint")}
                   />
                 </Field>
-                <Field label="Issue date">
+                <Field label={t("issueDate")}>
                   <input
                     type="date"
                     value={form.issueDate}
@@ -345,15 +354,15 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
               </>
             ) : (
               <p className="field-hint" style={{ alignSelf: "center" }}>
-                Most new items start <b>In Store</b>. Issue them later from the register.
+                {t("initialHint")}
               </p>
             )}
           </>
         )}
 
-        <div className="form-section">Documents</div>
+        <div className="form-section">{t("secDocs")}</div>
 
-        <Field label="Voucher file" required error={errors.voucher} className="full">
+        <Field label={t("voucherFile")} required error={errors.voucher} className="full">
           <FilePicker
             file={files.voucher}
             currentUrl={form.voucherUrl}
@@ -362,7 +371,7 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Notesheet" className="full">
+        <Field label={t("notesheet")} className="full">
           <FilePicker
             file={files.notesheet}
             currentUrl={form.notesheetUrl}
@@ -371,7 +380,7 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Product photo" className="full" hint="Large photos are resized automatically.">
+        <Field label={t("productPhoto")} className="full" hint={t("photoHint")}>
           <FilePicker
             file={files.photo}
             currentUrl={form.productPhotoUrl}
@@ -380,11 +389,11 @@ export default function ItemForm({ item, items, onSaved, onClose }: Props) {
           />
         </Field>
 
-        <Field label="Remarks" className="full">
+        <Field label={t("remarks")} className="full">
           <textarea
             value={form.remarks}
             onChange={(e) => set("remarks", e.target.value)}
-            placeholder="Any additional notes"
+            placeholder={t("remarksPh")}
           />
         </Field>
 
