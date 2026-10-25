@@ -1,13 +1,31 @@
-export type Status = "In Store" | "Issued" | "Repair" | "Damaged";
+export const STATUSES = ["In Store", "Issued", "Repair", "Damaged"] as const;
+export type Status = (typeof STATUSES)[number];
 
-export type Condition = "Excellent" | "Good" | "Repairable" | "Poor";
+export const CONDITIONS = ["Excellent", "Good", "Repairable", "Poor"] as const;
+export type Condition = (typeof CONDITIONS)[number];
 
-export type TransactionType =
-  | "Purchase"
-  | "Issue"
-  | "Return"
-  | "Repair"
-  | "Damaged";
+export const CATEGORIES = [
+  "Furniture",
+  "Crockery",
+  "Electrical",
+  "Stationery",
+  "Sports",
+  "Kitchen",
+  "Other",
+] as const;
+
+export const TRANSACTION_TYPES = [
+  "Purchase",
+  "Issue",
+  "Return",
+  "Repair",
+  "Repaired",
+  "Damaged",
+] as const;
+export type TransactionType = (typeof TRANSACTION_TYPES)[number];
+
+// Transactions a user can make from the register (Purchase is automatic).
+export type MovementType = Exclude<TransactionType, "Purchase">;
 
 export type Allocation = {
   id: string;
@@ -58,6 +76,35 @@ export type Item = {
   transactions: Transaction[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type DashboardTransaction = Transaction & {
+  itemId: string;
+  itemName: string;
+  inventoryNo: string;
+  category: string;
+};
+
+export type DashboardData = {
+  stats: {
+    lines: number;
+    total: number;
+    store: number;
+    issued: number;
+    repair: number;
+    damaged: number;
+  };
+  recent: DashboardTransaction[];
+  issued: IssuedRow[];
+};
+
+export type IssuedRow = {
+  holder: string;
+  itemId: string;
+  itemName: string;
+  inventoryNo: string;
+  qty: number;
+  since: string;
 };
 
 export const emptyForm = {

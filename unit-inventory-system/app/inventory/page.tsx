@@ -1,791 +1,463 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { Allocation, Item, TransactionType } from "@/lib/types";
+/* eslint-disable @next/next/no-img-element -- uploaded files are served by
+   our own route and already compressed on upload. */
 
-type TransactionForm = {
-  type: Exclude<TransactionType, "Purchase">;
-  item: Item;
-};
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { useI18n } from "@/app/components/I18nProvider";
+import ItemDetail from "@/app/components/ItemDetail";
+import ItemForm from "@/app/components/ItemForm";
+import MovementForm from "@/app/components/MovementForm";
+import { ConfirmDialog, Modal, Toast } from "@/app/components/ui";
+import { api, errorText, useToast } from "@/lib/client";
+import type { MsgKey } from "@/lib/i18n";
+import {
+  badgeClass,
+  getBreakdown,
+  getIssuedHolders,
+  isImageFile,
+  localDate,
+  searchText,
+} from "@/lib/inventory";
+import { useItems } from "@/lib/useItems";
+import { CATEGORIES, STATUSES, type MovementType, type Status } from "@/lib/types";
 
-type PreviewFile = {
-  title: string;
-  url: string;
-  type: "image" | "file";
-};
+type Preview = { title: string; url: string };
 
-function sumAllocations(allocations: Allocation[] = [], type: string) {
-  return allocations
-    .filter((allocation) => allocation.type === type)
-    .reduce((sum, allocation) => sum + Number(allocation.qty || 0), 0);
+const statusKey = (s: string) => s.replace(/\s+/g, "");
+
+function csvCell(value: unknown) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
-function isImageFile(url: string) {
-  const lower = url.toLowerCase();
-  return (
-    lower.endsWith(".jpg") ||
-    lower.endsWith(".jpeg") ||
-    lower.endsWith(".png") ||
-    lower.endsWith(".webp")
+function InventoryRegister() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const { t, n, status: statusText, condition: conditionText, category: categoryText, locale } = useI18n();
+  const { items, loading, error, upsert, remove } = useItems();
+  const [toast, showToast] = useToast();
+
+  const [search, setSearch] = useState(() => params.get("q") || "");
+  const [category, setCategory] = useState(() => params.get("category") || "");
+  const [status, setStatus] = useState(() => params.get("status") || "");
+  const [selectedId, setSelectedId] = useState<string | null>(() => params.get("item"));
+  const [editing, setEditing] = useState(false);
+  const [movement, setMovement] = useState<MovementType | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [preview, setPreview] = useState<Preview | null>(null);
+
+  // "Add Item" links (header, dashboard) open the form with ?new=1.
+  const adding = params.has("new");
+
+  const updateUrl = useCallback(
+    (change: (p: URLSearchParams) => void) => {
+      const next = new URLSearchParams(params.toString());
+      change(next);
+      const query = next.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [params, pathname, router]
   );
-}
 
-export default function InventoryPage() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("All");
-  const [selected, setSelected] = useState<Item | null>(null);
-  const [message, setMessage] = useState("");
+  // Typing stays smooth; filtering catches up a moment later.
+  const deferredSearch = useDeferredValue(search);
 
-  const [filePreview, setFilePreview] = useState<PreviewFile | null>(null);
+  // Search also matches the translated labels (e.g. "আসবাবপত্র" finds Furniture).
+  const rows = useMemo(
+    () =>
+      items.map((item) => ({
+        item,
+        b: getBreakdown(item.allocations),
+        text: `${searchText(item)} ${categoryText(item.category)} ${statusText(item.status)} ${conditionText(
+          item.condition
+        )}`.toLowerCase(),
+      })),
+    [items, categoryText, statusText, conditionText]
+  );
 
-  const [txnForm, setTxnForm] = useState<TransactionForm | null>(null);
-  const [txnQty, setTxnQty] = useState(1);
-  const [txnIssuedTo, setTxnIssuedTo] = useState("");
-  const [txnDate, setTxnDate] = useState("");
-  const [txnVoucherNo, setTxnVoucherNo] = useState("");
-  const [txnRemarks, setTxnRemarks] = useState("");
+  const filtered = useMemo(() => {
+    const q = deferredSearch.toLowerCase().trim();
+    return rows.filter(
+      (r) =>
+        (!category || r.item.category === category) &&
+        (!status || r.b[status as Status] > 0) &&
+        (!q || r.text.includes(q))
+    );
+  }, [rows, deferredSearch, category, status]);
 
-  async function loadItems() {
-    const res = await fetch("/api/items", { cache: "no-store" });
-    const data = await res.json();
-    setItems(data);
+  const categories = useMemo(() => {
+    const extra = items.map((i) => i.category).filter((c) => !CATEGORIES.includes(c as never));
+    return [...CATEGORIES, ...new Set(extra)];
+  }, [items]);
+
+  // Names used before, offered as suggestions when issuing.
+  const holders = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of items) {
+      for (const h of getIssuedHolders(item.allocations)) names.add(h.holder);
+      for (const tx of item.transactions) if (tx.type === "Issue" && tx.issuedTo) names.add(tx.issuedTo);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const selected = items.find((i) => i.id === selectedId) || null;
+  const filtersOn = Boolean(search || category || status);
+
+  function movementMessage(type: MovementType, qty: number, holder: string) {
+    if (type === "Return") return holder ? t("msg_ReturnFrom", { qty, holder }) : t("msg_Return", { qty });
+    return t(`msg_${type}` as MsgKey, { qty, holder });
   }
 
-  useEffect(() => {
-    loadItems();
-  }, []);
+  function openItem(id: string) {
+    setSelectedId(id);
+  }
 
-  function showMessage(text: string) {
-    setMessage(text);
-    setTimeout(() => setMessage(""), 3000);
+  function closeItem() {
+    setSelectedId(null);
+    if (params.has("item")) updateUrl((p) => p.delete("item"));
+  }
+
+  function closeAdd() {
+    updateUrl((p) => p.delete("new"));
+  }
+
+  function clearFilters() {
+    setSearch("");
+    setCategory("");
+    setStatus("");
+  }
+
+  async function deleteSelected() {
+    if (!selected) return;
+    try {
+      await api(`/api/items/${selected.id}`, { method: "DELETE" });
+      remove(selected.id);
+      setConfirmDelete(false);
+      closeItem();
+      showToast(t("deleted", { no: selected.inventoryNo }));
+    } catch (err) {
+      showToast(errorText(err), { kind: "error" });
+    }
   }
 
   function openPreview(title: string, url: string) {
-    if (!url) {
-      showMessage(`${title} is not available.`);
-      return;
-    }
-
-    setFilePreview({
-      title,
-      url,
-      type: isImageFile(url) ? "image" : "file",
-    });
-  }
-
-  function openTransactionModal(
-    type: Exclude<TransactionType, "Purchase">,
-    item: Item
-  ) {
-    setTxnForm({ type, item });
-    setTxnQty(1);
-    setTxnIssuedTo("");
-    setTxnDate(new Date().toISOString().slice(0, 10));
-    setTxnVoucherNo("");
-    setTxnRemarks("");
-  }
-
-  function closeTransactionModal() {
-    setTxnForm(null);
-    setTxnQty(1);
-    setTxnIssuedTo("");
-    setTxnDate("");
-    setTxnVoucherNo("");
-    setTxnRemarks("");
-  }
-
-  async function submitTransaction() {
-    if (!txnForm) return;
-
-    const { type, item } = txnForm;
-
-    if (!txnQty || txnQty < 1) {
-      showMessage("Valid quantity is required.");
-      return;
-    }
-
-    const storeQty = sumAllocations(item.allocations, "In Store");
-    const issuedQty = sumAllocations(item.allocations, "Issued");
-
-    if (type === "Issue" && txnQty > storeQty) {
-      showMessage("Issue quantity cannot exceed In Store quantity.");
-      return;
-    }
-
-    if (type === "Return" && txnQty > issuedQty) {
-      showMessage("Return quantity cannot exceed issued quantity.");
-      return;
-    }
-
-    if ((type === "Repair" || type === "Damaged") && txnQty > storeQty) {
-      showMessage(`${type} quantity cannot exceed In Store quantity.`);
-      return;
-    }
-
-    if (type === "Issue" && !txnIssuedTo.trim()) {
-      showMessage("Issued To field is required.");
-      return;
-    }
-
-    const res = await fetch(`/api/items/${item.id}/transaction`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type,
-        qty: txnQty,
-        issuedTo: txnIssuedTo,
-        voucherNo: txnVoucherNo,
-        remarks: txnRemarks,
-        date: txnDate || new Date().toISOString().slice(0, 10),
-      }),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      showMessage(data.message || "Transaction failed.");
-      return;
-    }
-
-    await loadItems();
-    setSelected(data);
-    closeTransactionModal();
-    showMessage(`${type} transaction completed successfully.`);
+    if (url) setPreview({ title, url });
   }
 
   function exportCSV() {
-    const header = [
-      "Inventory No",
-      "Item",
-      "Category",
-      "Total Qty",
-      "In Store",
-      "Issued",
-      "Repair",
-      "Damaged",
-      "Voucher No",
-      "Location",
-      "Cost",
-      "Condition",
-      "Status",
-      "Remarks",
-    ];
+    const header = (
+      [
+        "colInvNo", "colItem", "colCategory", "colTotal", "colInStore", "colIssued", "colRepair",
+        "colDamaged", "colHeldBy", "colVoucherNo", "colBuyDate", "colCost", "colLocation",
+        "colCondition", "colStatus", "colRemarks",
+      ] as MsgKey[]
+    ).map((k) => t(k));
 
-    const rows = items.map((x) => [
-      x.inventoryNo,
-      x.itemName,
-      x.category,
-      x.quantity,
-      sumAllocations(x.allocations, "In Store"),
-      sumAllocations(x.allocations, "Issued"),
-      sumAllocations(x.allocations, "Repair"),
-      sumAllocations(x.allocations, "Damaged"),
-      x.voucherNo,
-      x.location,
-      x.cost,
-      x.condition,
-      x.status,
-      x.remarks,
+    // Numbers stay as plain digits so Excel can add them up.
+    const lines = filtered.map(({ item: x, b }) => [
+      x.inventoryNo, x.itemName, categoryText(x.category), x.quantity, b["In Store"], b.Issued, b.Repair,
+      b.Damaged, getIssuedHolders(x.allocations).map((h) => `${h.holder} (${h.qty})`).join("; "),
+      x.voucherNo, x.buyDate, x.cost, x.location, conditionText(x.condition), statusText(x.status), x.remarks,
     ]);
 
-    const csv = [header, ...rows]
-      .map((row) =>
-        row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")
-      )
-      .join("\n");
-
-    const blob = new Blob([csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-
-    const url = URL.createObjectURL(blob);
-
+    // The BOM makes Excel read Bangla text and ৳ correctly.
+    const csv = "﻿" + [header, ...lines].map((r) => r.map(csvCell).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "unit-inventory-register.csv";
+    a.download = `${t("csvFile")}-${localDate()}.csv`;
     a.click();
-
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  const filtered = useMemo(() => {
-    return items.filter((item) => {
-      const q = search.toLowerCase().trim();
+  const filterSummary = [
+    category && t("filterCategory", { v: categoryText(category) }),
+    status && t("filterStatus", { v: statusText(status) }),
+    search && t("filterSearch", { v: search }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
-      const allocationText = (item.allocations || [])
-        .map(
-          (allocation) =>
-            `${allocation.type} ${allocation.holder} ${allocation.location} ${allocation.voucherNo} ${allocation.remarks}`
-        )
-        .join(" ")
-        .toLowerCase();
-
-      const matchesSearch =
-        !q ||
-        item.inventoryNo.toLowerCase().includes(q) ||
-        item.itemName.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q) ||
-        item.location.toLowerCase().includes(q) ||
-        item.issuedTo.toLowerCase().includes(q) ||
-        item.voucherNo.toLowerCase().includes(q) ||
-        item.condition.toLowerCase().includes(q) ||
-        item.status.toLowerCase().includes(q) ||
-        item.remarks.toLowerCase().includes(q) ||
-        allocationText.includes(q);
-
-      const matchesFilter =
-        filter === "All" || item.category === filter || item.status === filter;
-
-      return matchesSearch && matchesFilter;
-    });
-  }, [items, search, filter]);
-
-  function getTransactionTitle(type: string) {
-    if (type === "Issue") return "Issue Item";
-    if (type === "Return") return "Return Item";
-    if (type === "Repair") return "Send for Repair";
-    if (type === "Damaged") return "Mark as Damaged";
-    return "Transaction";
-  }
-
-  function getTransactionNote(type: string) {
-    if (type === "Issue") {
-      return "Issue selected quantity to a person, office, company or section.";
-    }
-
-    if (type === "Return") {
-      return "Return previously issued quantity back to store. Returned From is optional.";
-    }
-
-    if (type === "Repair") {
-      return "This will move quantity from In Store to Repair Store.";
-    }
-
-    if (type === "Damaged") {
-      return "This will move quantity from In Store to Damaged Store.";
-    }
-
-    return "";
-  }
+  const pieces = filtered.reduce((s, r) => s + r.item.quantity, 0);
 
   return (
-    <section>
-      <div className="page-head row-head">
+    <div className="page">
+      <div className="page-head no-print">
         <div>
-          <h2>Inventory Register</h2>
-          <p>View accountability, issue, return, repair and damaged records.</p>
+          <h2>{t("regTitle")}</h2>
+          <p>{t("regSub")}</p>
         </div>
-
-        <div className="page-actions">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search inv no / item / holder / voucher no"
-          />
-
-          <button onClick={exportCSV}>Export CSV</button>
-        </div>
+        <Link className="btn" href="/inventory?new=1" replace scroll={false}>
+          {t("addItem")}
+        </Link>
       </div>
 
-      <section className="panel">
-        <div className="filters">
-          {[
-            "All",
-            "Furniture",
-            "Crockery",
-            "Electrical",
-            "Stationery",
-            "Sports",
-            "Kitchen",
-            "Other",
-            "In Store",
-            "Issued",
-            "Repair",
-            "Damaged",
-          ].map((f) => (
-            <button
-              key={f}
-              className={filter === f ? "active-filter" : ""}
-              onClick={() => setFilter(f)}
-            >
-              {f}
+      <div className="print-only print-title">
+        <img src="/logo-mark.png" alt="" className="print-logo" />
+        <h1>{t("printTitle")}</h1>
+        <p suppressHydrationWarning>
+          {t("printed", { date: new Date().toLocaleString(locale), n: filtered.length })}
+          {filterSummary ? ` · ${filterSummary}` : ""}
+        </p>
+      </div>
+
+      <section className="card">
+        <div className="toolbar">
+          <input
+            className="search"
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("searchPh")}
+            aria-label={t("search")}
+          />
+          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t("colCategory")}>
+            <option value="">{t("allCategories")}</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {categoryText(c)}
+              </option>
+            ))}
+          </select>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label={t("colStatus")}>
+            <option value="">{t("anyStatus")}</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {t(`has_${statusKey(s)}` as MsgKey)}
+              </option>
+            ))}
+          </select>
+          {filtersOn && (
+            <button type="button" className="btn btn-ghost" onClick={clearFilters}>
+              {t("clear")}
             </button>
-          ))}
+          )}
+          <div className="toolbar-end">
+            <button type="button" className="btn btn-ghost" onClick={() => window.print()} disabled={!filtered.length}>
+              {t("print")}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={exportCSV} disabled={!filtered.length}>
+              {t("exportCsv")}
+            </button>
+          </div>
         </div>
 
         <div className="table-wrap">
-          <table>
+          <table className="table-register">
             <thead>
               <tr>
-                <th>Ser</th>
-                <th>Photo</th>
-                <th>Inv No</th>
-                <th>Item</th>
-                <th>Category</th>
-                <th>Total</th>
-                <th>In Store</th>
-                <th>Issued</th>
-                <th>Repair</th>
-                <th>Damaged</th>
-                <th>Voucher No</th>
-                <th>Condition</th>
-                <th>Status</th>
-                <th>Action</th>
+                <th className="num">{t("colSer")}</th>
+                <th>{t("colItem")}</th>
+                <th>{t("colCategory")}</th>
+                <th className="num">{t("colTotal")}</th>
+                <th className="num">{t("colInStore")}</th>
+                <th className="num">{t("colIssued")}</th>
+                <th className="num">{t("colRepair")}</th>
+                <th className="num">{t("colDamaged")}</th>
+                <th>{t("colStatus")}</th>
+                <th>{t("colHeldBy")}</th>
               </tr>
             </thead>
-
             <tbody>
-              {filtered.map((item, index) => (
-                <tr key={item.id}>
-                  <td>{index + 1}</td>
-
-                  <td>
-                    {item.productPhotoUrl ? (
-                      <img
-                        src={item.productPhotoUrl}
-                        alt={item.itemName}
-                        className="item-thumb clickable-thumb"
-                        onClick={() =>
-                          openPreview("Product Photo", item.productPhotoUrl)
-                        }
-                      />
-                    ) : (
-                      "—"
-                    )}
+              {filtered.map(({ item, b }, index) => (
+                <tr key={item.id} className="clickable" onClick={() => openItem(item.id)}>
+                  <td className="num hide-sm">{n(index + 1)}</td>
+                  <td className="cell-main">
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {item.productPhotoUrl ? (
+                        <img
+                          src={item.productPhotoUrl}
+                          alt=""
+                          className="thumb no-print"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      ) : (
+                        <span className="thumb thumb-empty no-print">—</span>
+                      )}
+                      <div>
+                        <div style={{ fontWeight: 800 }}>{item.itemName}</div>
+                        <a
+                          href={`?item=${item.id}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openItem(item.id);
+                          }}
+                          className="nowrap"
+                        >
+                          {item.inventoryNo}
+                        </a>
+                      </div>
+                    </div>
                   </td>
-
-                  <td className="link" onClick={() => setSelected(item)}>
-                    {item.inventoryNo}
-                  </td>
-
-                  <td>{item.itemName}</td>
-                  <td>{item.category}</td>
-                  <td>{item.quantity}</td>
-                  <td>{sumAllocations(item.allocations, "In Store")}</td>
-                  <td>{sumAllocations(item.allocations, "Issued")}</td>
-                  <td>{sumAllocations(item.allocations, "Repair")}</td>
-                  <td>{sumAllocations(item.allocations, "Damaged")}</td>
-
-                  <td>
-                    {item.voucherUrl ? (
-                      <button
-                        className="small"
-                        onClick={() => openPreview("Voucher", item.voucherUrl)}
-                      >
-                        {item.voucherNo || "View"}
-                      </button>
-                    ) : (
-                      item.voucherNo || "—"
-                    )}
-                  </td>
-
-                  <td>{item.condition}</td>
-
-                  <td>
-                    <span
-                      className={`badge ${item.status
-                        .replaceAll(" ", "-")
-                        .toLowerCase()}`}
+                  <td data-label={t("colCategory")}>{categoryText(item.category)}</td>
+                  <td data-label={t("colTotal")} className="num">{n(item.quantity)}</td>
+                  {[b["In Store"], b.Issued, b.Repair, b.Damaged].map((v, i) => (
+                    <td
+                      key={i}
+                      data-label={t((["colInStore", "colIssued", "colRepair", "colDamaged"] as MsgKey[])[i])}
+                      className={`num ${v ? "" : "zero"}`}
                     >
-                      {item.status}
-                    </span>
+                      {n(v)}
+                    </td>
+                  ))}
+                  <td data-label={t("colStatus")}>
+                    <span className={badgeClass(item.status)}>{statusText(item.status)}</span>
                   </td>
-
-                  <td>
-                    <button className="small" onClick={() => setSelected(item)}>
-                      View
-                    </button>
+                  <td data-label={t("colHeldBy")} className="wrap">
+                    {item.issuedTo || <span className="muted">—</span>}
                   </td>
                 </tr>
               ))}
 
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={14} className="empty">
-                    No item found.
+                  <td colSpan={10} className="empty">
+                    {loading ? (
+                      t("loading")
+                    ) : error ? (
+                      error
+                    ) : items.length === 0 ? (
+                      <>
+                        {t("noItems")}{" "}
+                        <Link href="/inventory?new=1" replace scroll={false}>
+                          {t("addFirst")}
+                        </Link>
+                      </>
+                    ) : (
+                      <>
+                        {t("noFilterMatch")}{" "}
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={clearFilters}>
+                          {t("clearFilters")}
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+
+        {!loading && items.length > 0 && (
+          <div className="table-foot no-print">
+            {t("showing", { shown: filtered.length, total: items.length, pieces })}
+          </div>
+        )}
       </section>
 
+      <div className="print-only signatures">
+        <div>{t("sigPrepared")}</div>
+        <div>{t("sigChecked")}</div>
+        <div>{t("sigCounter")}</div>
+      </div>
+
       {selected && (
-        <div className="modal-bg" onClick={() => setSelected(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <h2>{selected.itemName}</h2>
-              <button onClick={() => setSelected(null)}>×</button>
-            </div>
-            <div className="file-preview-strip">
-              <div
-                className={`mini-file-card ${
-                  selected.productPhotoUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Product Photo", selected.productPhotoUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.productPhotoUrl ? (
-                    <img src={selected.productPhotoUrl} alt="Product Photo" />
-                  ) : (
-                    <span>—</span>
-                  )}
-                </div>
-                <b>Product Photo</b>
-              </div>
-
-              <div
-                className={`mini-file-card ${
-                  selected.voucherUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Voucher", selected.voucherUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.voucherUrl && isImageFile(selected.voucherUrl) ? (
-                    <img src={selected.voucherUrl} alt="Voucher" />
-                  ) : (
-                    <span>📄</span>
-                  )}
-                </div>
-                <b>Voucher</b>
-              </div>
-
-              <div
-                className={`mini-file-card ${
-                  selected.notesheetUrl ? "" : "disabled-file-card"
-                }`}
-                onClick={() => openPreview("Notesheet", selected.notesheetUrl)}
-              >
-                <div className="mini-file-thumb">
-                  {selected.notesheetUrl && isImageFile(selected.notesheetUrl) ? (
-                    <img src={selected.notesheetUrl} alt="Notesheet" />
-                  ) : (
-                    <span>📄</span>
-                  )}
-                </div>
-                <b>Notesheet</b>
-              </div>
-            </div>
-
-            <div className="detail-grid">
-              <p>
-                <b>Inventory No:</b> {selected.inventoryNo}
-              </p>
-
-              <p>
-                <b>Category:</b> {selected.category}
-              </p>
-
-              <p>
-                <b>Total Quantity:</b> {selected.quantity}
-              </p>
-
-              <p>
-                <b>In Store:</b> {sumAllocations(selected.allocations, "In Store")}
-              </p>
-
-              <p>
-                <b>Issued:</b> {sumAllocations(selected.allocations, "Issued")}
-              </p>
-
-              <p>
-                <b>Repair:</b> {sumAllocations(selected.allocations, "Repair")}
-              </p>
-
-              <p>
-                <b>Damaged:</b> {sumAllocations(selected.allocations, "Damaged")}
-              </p>
-
-              <p>
-                <b>Buy Date:</b> {selected.buyDate || "—"}
-              </p>
-
-              <p>
-                <b>Location:</b> {selected.location || "—"}
-              </p>
-
-              <p>
-                <b>Cost:</b> ৳{selected.cost}
-              </p>
-
-              <p>
-                <b>Condition:</b> {selected.condition}
-              </p>
-
-              <p>
-                <b>Status:</b> {selected.status}
-              </p>
-
-              <p className="full">
-                <b>Voucher No:</b> {selected.voucherNo || "—"}
-              </p>
-
-              <p className="full">
-                <b>Remarks:</b> {selected.remarks || "—"}
-              </p>
-            </div>
-
-            <h3>Accountability Details</h3>
-
-            <div className="table-wrap modal-table-wrap">
-              <table className="accountability-table">
-                <thead>
-                  <tr>
-                    <th>Ser</th>
-                    <th>Status</th>
-                    <th>Qty</th>
-                    <th>Holder</th>
-                    <th>Location</th>
-                    <th>Date</th>
-                    <th>Voucher/Note</th>
-                    <th>Remarks</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {(selected.allocations || []).map((allocation, index) => (
-                    <tr key={allocation.id}>
-                      <td>{index + 1}</td>
-
-                      <td>
-                        <span
-                          className={`badge ${allocation.type
-                            .replaceAll(" ", "-")
-                            .toLowerCase()}`}
-                        >
-                          {allocation.type}
-                        </span>
-                      </td>
-
-                      <td>{allocation.qty}</td>
-                      <td>{allocation.holder || "—"}</td>
-                      <td>{allocation.location || "—"}</td>
-                      <td>{allocation.date || "—"}</td>
-                      <td>{allocation.voucherNo || "—"}</td>
-                      <td>{allocation.remarks || "—"}</td>
-                    </tr>
-                  ))}
-
-                  {(!selected.allocations || selected.allocations.length === 0) && (
-                    <tr>
-                      <td colSpan={8} className="empty">
-                        No accountability record found.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <h3>Transaction History</h3>
-
-            <div className="txn-box">
-              {selected.transactions.length === 0 ? (
-                <p>No transaction yet.</p>
-              ) : (
-                selected.transactions.map((t) => (
-                  <div key={t.id} className="txn">
-                    <b>{t.type}</b> — Qty {t.qty} — {t.date}
-                    {t.issuedTo ? <span> — {t.issuedTo}</span> : null}
-                    {t.voucherNo ? <span> — Voucher: {t.voucherNo}</span> : null}
-                    {t.remarks ? <span> — {t.remarks}</span> : null}
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="modal-actions">
-              <button onClick={() => openTransactionModal("Issue", selected)}>
-                Issue
-              </button>
-
-              <button onClick={() => openTransactionModal("Return", selected)}>
-                Return
-              </button>
-
-              <button onClick={() => openTransactionModal("Repair", selected)}>
-                Repair
-              </button>
-
-              <button onClick={() => openTransactionModal("Damaged", selected)}>
-                Damaged
-              </button>
-
-              <button className="dark" onClick={() => setSelected(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <ItemDetail
+          item={selected}
+          onClose={closeItem}
+          onMove={setMovement}
+          onEdit={() => setEditing(true)}
+          onDelete={() => setConfirmDelete(true)}
+          onPreview={openPreview}
+        />
       )}
 
-      {filePreview && (
-        <div className="file-preview-bg" onClick={() => setFilePreview(null)}>
-          <div className="file-preview-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="file-preview-head">
-              <h2>{filePreview.title}</h2>
-              <button onClick={() => setFilePreview(null)}>×</button>
-            </div>
+      {selected && movement && (
+        <MovementForm
+          item={selected}
+          type={movement}
+          holders={holders}
+          onClose={() => setMovement(null)}
+          onDone={(updated) => {
+            upsert(updated);
+            setMovement(null);
+            const txn = updated.transactions[0];
+            showToast(movementMessage(movement, txn?.qty || 0, txn?.issuedTo || ""), {
+              action: txn ? { label: t("printVoucher"), href: `/print/voucher/${updated.id}/${txn.id}` } : undefined,
+            });
+          }}
+        />
+      )}
 
-            <div className="file-preview-body">
-              {filePreview.type === "image" ? (
-                <img
-                  src={filePreview.url}
-                  alt={filePreview.title}
-                  className="large-file-image"
-                />
-              ) : (
-                <iframe
-                  src={filePreview.url}
-                  title={filePreview.title}
-                  className="large-file-frame"
-                />
-              )}
-            </div>
+      {(adding || (selected && editing)) && (
+        <ItemForm
+          item={adding ? null : selected}
+          items={items}
+          onClose={() => (adding ? closeAdd() : setEditing(false))}
+          onSaved={(saved, created) => {
+            upsert(saved);
+            if (created) {
+              closeAdd();
+              showToast(t("added", { no: saved.inventoryNo }));
+            } else {
+              setEditing(false);
+              showToast(t("changesSaved"));
+            }
+          }}
+        />
+      )}
 
-            <div className="file-preview-actions">
-              <a href={filePreview.url} target="_blank">
-                Open in New Tab
+      {selected && confirmDelete && (
+        <ConfirmDialog
+          title={t("deleteTitle")}
+          danger
+          confirmLabel={t("deletePermanently")}
+          message={
+            <p>
+              <b>
+                {selected.inventoryNo} — {selected.itemName}
+              </b>{" "}
+              {t("deleteMsg")}
+            </p>
+          }
+          onConfirm={deleteSelected}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+
+      {preview && (
+        <Modal
+          size="lg"
+          title={preview.title}
+          onClose={() => setPreview(null)}
+          footer={
+            <>
+              <a className="btn btn-ghost" href={preview.url} target="_blank" rel="noopener noreferrer">
+                {t("openNewTab")}
               </a>
-
-              <button className="dark" onClick={() => setFilePreview(null)}>
-                Close
+              <button type="button" className="btn btn-dark" onClick={() => setPreview(null)}>
+                {t("close")}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          {isImageFile(preview.url) ? (
+            <img src={preview.url} alt={preview.title} className="preview-image" />
+          ) : (
+            <iframe src={preview.url} title={preview.title} className="preview-frame" />
+          )}
+        </Modal>
       )}
 
-      {txnForm && (
-        <div className="modal-bg" onClick={closeTransactionModal}>
-          <div className="txn-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <div>
-                <h2>{getTransactionTitle(txnForm.type)}</h2>
-                <p className="modal-subtitle">
-                  {txnForm.item.inventoryNo} — {txnForm.item.itemName}
-                </p>
-              </div>
+      <Toast toast={toast} />
+    </div>
+  );
+}
 
-              <button onClick={closeTransactionModal}>×</button>
-            </div>
+function Fallback() {
+  const { t } = useI18n();
+  return <div className="page">{t("loading")}</div>;
+}
 
-            <div className="txn-form-body">
-              <div className="transaction-info-box">
-                <div>
-                  <span>Total</span>
-                  <b>{txnForm.item.quantity}</b>
-                </div>
-
-                <div>
-                  <span>In Store</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "In Store")}</b>
-                </div>
-
-                <div>
-                  <span>Issued</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "Issued")}</b>
-                </div>
-
-                <div>
-                  <span>Repair</span>
-                  <b>{sumAllocations(txnForm.item.allocations, "Repair")}</b>
-                </div>
-              </div>
-
-              <p className="txn-help-text">{getTransactionNote(txnForm.type)}</p>
-
-              <div className="form-grid two-field-form txn-form-grid">
-                <label>
-                  Transaction Type
-                  <input value={txnForm.type} readOnly />
-                </label>
-
-                <label>
-                  Quantity
-                  <input
-                    type="number"
-                    min="1"
-                    value={txnQty}
-                    onChange={(e) => setTxnQty(Number(e.target.value))}
-                  />
-                </label>
-
-                {txnForm.type === "Issue" && (
-                  <label className="full">
-                    Issued To *
-                    <input
-                      value={txnIssuedTo}
-                      onChange={(e) => setTxnIssuedTo(e.target.value)}
-                      placeholder="Snk A / Office / Section"
-                    />
-                  </label>
-                )}
-
-                {txnForm.type === "Return" && (
-                  <label className="full">
-                    Returned From
-                    <select
-                      value={txnIssuedTo}
-                      onChange={(e) => setTxnIssuedTo(e.target.value)}
-                    >
-                      <option value="">Any issued holder</option>
-                      {(txnForm.item.allocations || [])
-                        .filter((allocation) => allocation.type === "Issued")
-                        .map((allocation) => (
-                          <option key={allocation.id} value={allocation.holder}>
-                            {allocation.holder} — Qty {allocation.qty}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                )}
-
-                <label>
-                  Date
-                  <input
-                    type="date"
-                    value={txnDate}
-                    onChange={(e) => setTxnDate(e.target.value)}
-                  />
-                </label>
-
-                <label>
-                  Voucher / Note No
-                  <input
-                    value={txnVoucherNo}
-                    onChange={(e) => setTxnVoucherNo(e.target.value)}
-                    placeholder="Issue voucher / return note / repair note"
-                  />
-                </label>
-
-                <label className="full">
-                  Remarks
-                  <textarea
-                    value={txnRemarks}
-                    onChange={(e) => setTxnRemarks(e.target.value)}
-                    placeholder="Additional remarks"
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="modal-actions txn-submit-row">
-              <button className="dark" onClick={closeTransactionModal}>
-                Cancel
-              </button>
-
-              <button onClick={submitTransaction}>Submit {txnForm.type}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {message && <div className="toast">{message}</div>}
-    </section>
+export default function InventoryPage() {
+  return (
+    <Suspense fallback={<Fallback />}>
+      <InventoryRegister />
+    </Suspense>
   );
 }

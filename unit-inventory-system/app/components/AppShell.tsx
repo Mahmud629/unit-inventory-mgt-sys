@@ -3,159 +3,143 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { useI18n } from "./I18nProvider";
+
+// Own component so its updates re-render only the clock.
+function Clock() {
+  const { locale } = useI18n();
+  const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 15_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
+
+  return (
+    <div className="clock" aria-hidden>
+      <span>{now ? now.toLocaleDateString(locale, { weekday: "long" }) : " "}</span>
+      <b>
+        {now
+          ? now.toLocaleString(locale, {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            })
+          : " "}
+      </b>
+    </div>
+  );
+}
+
+// The theme lives on <html data-theme>; the inline script in layout.tsx sets
+// it before the first paint, and this hook reads it back.
+function subscribeTheme(callback: () => void) {
+  const observer = new MutationObserver(callback);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => observer.disconnect();
+}
+
+function useTheme() {
+  return useSyncExternalStore(
+    subscribeTheme,
+    () => (document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"),
+    () => "light" as const
+  );
+}
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const theme = useTheme();
+  const { t, lang, setLang } = useI18n();
 
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [dateTime, setDateTime] = useState("");
-
-  function active(path: string) {
-    if (path === "/" && pathname === "/") return "active";
-    if (path !== "/" && pathname.startsWith(path)) return "active";
-    return "";
+  // Login and print pages have no header or footer.
+  if (pathname === "/login" || pathname.startsWith("/print")) {
+    return <>{children}</>;
   }
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("inventory_theme") as
-      | "light"
-      | "dark"
-      | null;
-
-    const initialTheme = savedTheme || "light";
-
-    setTheme(initialTheme);
-    document.documentElement.setAttribute("data-theme", initialTheme);
-  }, []);
-
-  useEffect(() => {
-    function updateClock() {
-      const now = new Date();
-
-      const formatted = now.toLocaleString("en-GB", {
-        weekday: "short",
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      });
-
-      setDateTime(formatted);
-    }
-
-    updateClock();
-
-    const timer = setInterval(updateClock, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
   function toggleTheme() {
-    document.documentElement.classList.add("theme-changing");
-
-    const nextTheme = theme === "light" ? "dark" : "light";
-
-    setTheme(nextTheme);
-    localStorage.setItem("inventory_theme", nextTheme);
-    document.documentElement.setAttribute("data-theme", nextTheme);
-
-    setTimeout(() => {
-      document.documentElement.classList.remove("theme-changing");
-    }, 350);
+    const next = theme === "light" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("inventory_theme", next);
+    } catch {
+      // storage unavailable; the theme still changes for this visit
+    }
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-    });
-
+    await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
     router.refresh();
   }
 
-  if (pathname === "/login") {
-    return <main className="login-only">{children}</main>;
-  }
+  const nav = [
+    { href: "/", label: t("navDashboard") },
+    { href: "/inventory", label: t("navRegister") },
+  ];
+  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  const themeLabel = theme === "light" ? t("darkMode") : t("lightMode");
 
   return (
-    <main className="app-shell">
+    <div className="app">
       <header className="topbar">
-        <Link href="/" className="brand-logo-wrap" aria-label="Dashboard">
-          <Image
-            src="/logo.png"
-            alt="5 Signal Battalion Inventory Logo"
-            width={58}
-            height={58}
-            priority
-            className="brand-logo-img"
-          />
+        <Link href="/" className="brand" aria-label={t("navDashboard")}>
+          <Image src="/logo-mark.png" alt="5 Sig Bn UIMS" width={62} height={62} priority className="brand-logo" />
+          <div>
+            <h1>{t("appName")}</h1>
+            <p>{t("appSub")}</p>
+          </div>
         </Link>
 
-        <div className="brand-title">
-          <h1>5 Signal Battalion — Unit Inventory</h1>
-          <p>Unit Property Management System</p>
-        </div>
-
-        <div className="top-right-area">
-          <div className="top-clock">
-            <span>Date & Time</span>
-            <b>{dateTime}</b>
-          </div>
-
-          <div className="top-actions page-links">
-            <Link className={active("/")} href="/">
-              Dashboard
-            </Link>
-
-            <Link className={active("/inventory")} href="/inventory">
-              Inventory Register
-            </Link>
-
-            <Link className={active("/manage")} href="/manage">
-              Add / Edit / Remove
-            </Link>
-
-            <button
-              className="theme-icon-btn"
-              onClick={toggleTheme}
-              title={
-                theme === "light"
-                  ? "Switch to Dark Mode"
-                  : "Switch to Light Mode"
-              }
-              aria-label={
-                theme === "light"
-                  ? "Switch to Dark Mode"
-                  : "Switch to Light Mode"
-              }
+        <nav className="nav" aria-label="Main">
+          {nav.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={`nav-link ${isActive(link.href) ? "active" : ""}`}
+              aria-current={isActive(link.href) ? "page" : undefined}
             >
-              {theme === "light" ? "🌙" : "☀️"}
-            </button>
+              {link.label}
+            </Link>
+          ))}
+        </nav>
 
-            <button className="logout-btn" onClick={logout}>
-              Logout
-            </button>
-          </div>
+        <div className="topbar-tools">
+          <Clock />
+          <button
+            type="button"
+            className="lang-btn"
+            onClick={() => setLang(lang === "en" ? "bn" : "en")}
+            title={t("langTitle")}
+            lang={lang === "en" ? "bn" : "en"}
+          >
+            {t("langButton")}
+          </button>
+          <button type="button" className="icon-btn" onClick={toggleTheme} title={themeLabel} aria-label={themeLabel}>
+            <span suppressHydrationWarning>{theme === "light" ? "🌙" : "☀️"}</span>
+          </button>
+          <button type="button" className="logout-btn" onClick={logout}>
+            {t("logout")}
+          </button>
         </div>
       </header>
 
-      <section className="layout no-sidebar-layout">
-        <section className="content-area full-content-area">
-          <section key={pathname} className="content page-transition">
-            {children}
-          </section>
+      <main className="app-main">{children}</main>
 
-          <footer className="app-footer">
-            <span>© {new Date().getFullYear()} 5 Signal Battalion</span>
-            <span>Courtesy: BA 11108 Capt Asif Mahmud, Sigs</span>
-          </footer>
-        </section>
-      </section>
-    </main>
+      <footer className="footer">
+        <span suppressHydrationWarning>{t("footerCopy", { year: new Date().getFullYear() })}</span>
+        <span>{t("footerCourtesy")}</span>
+      </footer>
+    </div>
   );
 }

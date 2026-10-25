@@ -1,142 +1,182 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import type { Item, Transaction } from "@/lib/types";
+import { useI18n } from "@/app/components/I18nProvider";
+import { api, errorText } from "@/lib/client";
+import type { MsgKey } from "@/lib/i18n";
+import { badgeClass } from "@/lib/inventory";
+import type { DashboardData } from "@/lib/types";
 
-type DashboardTransaction = Transaction & {
-  itemName: string;
-  inventoryNo: string;
-  category: string;
-};
+const CARDS: {
+  key: keyof DashboardData["stats"];
+  label: MsgKey;
+  href: string;
+  className: string;
+}[] = [
+  { key: "total", label: "cardTotal", href: "/inventory", className: "" },
+  { key: "store", label: "cardStore", href: "/inventory?status=In+Store", className: "stat-store" },
+  { key: "issued", label: "cardIssued", href: "/inventory?status=Issued", className: "stat-issued" },
+  { key: "repair", label: "cardRepair", href: "/inventory?status=Repair", className: "stat-repair" },
+  { key: "damaged", label: "cardDamaged", href: "/inventory?status=Damaged", className: "stat-damaged" },
+];
 
 export default function DashboardPage() {
-  const [items, setItems] = useState<Item[]>([]);
-
-  async function loadItems() {
-    const res = await fetch("/api/items", { cache: "no-store" });
-    const data = await res.json();
-    setItems(data);
-  }
+  const router = useRouter();
+  const { t, n, txn } = useI18n();
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState("");
+  const [holderSearch, setHolderSearch] = useState("");
 
   useEffect(() => {
-    loadItems();
+    api<DashboardData>("/api/dashboard")
+      .then(setData)
+      .catch((err) => setError(errorText(err)));
   }, []);
 
-  const stats = useMemo(() => {
-    return {
-      total: items.reduce((sum, x) => sum + x.quantity, 0),
-      issued: items.reduce((sum, x) => sum + x.issuedQty, 0),
-      store: items.reduce((sum, x) => sum + x.availableQty, 0),
-      repair: items.filter((x) => x.status === "Repair").length,
-    };
-  }, [items]);
+  const issued = useMemo(() => {
+    const q = holderSearch.toLowerCase().trim();
+    const rows = data?.issued || [];
+    if (!q) return rows;
+    return rows.filter((r) => `${r.holder} ${r.itemName} ${r.inventoryNo}`.toLowerCase().includes(q));
+  }, [data, holderSearch]);
 
-  const recentTransactions = useMemo<DashboardTransaction[]>(() => {
-    return items
-      .flatMap((item) =>
-        item.transactions.map((txn) => ({
-          ...txn,
-          itemName: item.itemName,
-          inventoryNo: item.inventoryNo,
-          category: item.category,
-        }))
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      )
-      .slice(0, 10);
-  }, [items]);
+  const holderCount = new Set((data?.issued || []).map((r) => r.holder)).size;
+  const openItem = (id: string) => router.push(`/inventory?item=${id}`);
+  const placeholder = error || (data ? null : t("loading"));
 
   return (
-    <section>
+    <div className="page">
       <div className="page-head">
-        <h2>Dashboard</h2>
-        <p>Summary of unit property inventory.</p>
-      </div>
-
-      <div className="dashboard-grid dashboard-four">
-        <div className="big-card">
-          <p>Total Items</p>
-          <h2>{stats.total}</h2>
+        <div>
+          <h2>{t("dashTitle")}</h2>
+          <p>
+            {t("dashSub")}
+            {data ? ` — ${t("dashLines", { n: data.stats.lines })}` : ""}
+          </p>
         </div>
-
-        <div className="big-card">
-          <p>Issued Items</p>
-          <h2>{stats.issued}</h2>
-        </div>
-
-        <div className="big-card">
-          <p>In Store</p>
-          <h2>{stats.store}</h2>
-        </div>
-
-        <div className="big-card">
-          <p>Repair</p>
-          <h2>{stats.repair}</h2>
+        <div className="btn-group">
+          <Link className="btn btn-ghost" href="/inventory">
+            {t("openRegister")}
+          </Link>
+          <Link className="btn" href="/inventory?new=1">
+            {t("addItem")}
+          </Link>
         </div>
       </div>
 
-      <section className="panel recent-panel">
-        <div className="panel-head">
-          <h2>Recent Transactions</h2>
-          <p>Latest purchase, issue, return, repair and damaged records.</p>
-        </div>
+      <div className="stats">
+        {CARDS.map((card) => (
+          <Link key={card.key} href={card.href} className={`stat ${card.className}`}>
+            <span>{t(card.label)}</span>
+            <b>{data ? n(data.stats[card.key]) : "–"}</b>
+            <small>{t("viewItems")}</small>
+          </Link>
+        ))}
+      </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Ser</th>
-                <th>Date</th>
-                <th>Transaction</th>
-                <th>Inv No</th>
-                <th>Item</th>
-                <th>Category</th>
-                <th>Qty</th>
-                <th>Issued To</th>
-                <th>Voucher No</th>
-                <th>Remarks</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {recentTransactions.map((txn, index) => (
-                <tr key={txn.id}>
-                  <td>{index + 1}</td>
-                  <td>{txn.date || "—"}</td>
-
-                  <td>
-                    <span
-                      className={`badge ${txn.type
-                        .replaceAll(" ", "-")
-                        .toLowerCase()}`}
-                    >
-                      {txn.type}
-                    </span>
-                  </td>
-
-                  <td className="link">{txn.inventoryNo}</td>
-                  <td>{txn.itemName}</td>
-                  <td>{txn.category}</td>
-                  <td>{txn.qty}</td>
-                  <td>{txn.issuedTo || "—"}</td>
-                  <td>{txn.voucherNo || "—"}</td>
-                  <td>{txn.remarks || "—"}</td>
-                </tr>
-              ))}
-
-              {recentTransactions.length === 0 && (
+      <div className="grid-2">
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>{t("whoHolds")}</h3>
+              <p>{data ? t("holdersCount", { n: holderCount }) : t("holdersHint")}</p>
+            </div>
+            <input
+              className="input"
+              style={{ maxWidth: 220 }}
+              type="search"
+              placeholder={t("findHolder")}
+              value={holderSearch}
+              onChange={(e) => setHolderSearch(e.target.value)}
+              aria-label={t("findHolder")}
+            />
+          </div>
+          <div className="table-wrap" style={{ maxHeight: 440, overflowY: "auto" }}>
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={10} className="empty">
-                    No transaction found.
-                  </td>
+                  <th>{t("colHolder")}</th>
+                  <th>{t("colItem")}</th>
+                  <th className="num">{t("colQty")}</th>
+                  <th>{t("colSince")}</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </section>
+              </thead>
+              <tbody>
+                {issued.map((r) => (
+                  <tr key={`${r.holder}-${r.itemId}`} className="clickable" onClick={() => openItem(r.itemId)}>
+                    <td style={{ fontWeight: 700 }}>{r.holder}</td>
+                    <td>
+                      {r.itemName} <span className="muted nowrap">({r.inventoryNo})</span>
+                    </td>
+                    <td className="num">{n(r.qty)}</td>
+                    <td className="nowrap">{n(r.since)}</td>
+                  </tr>
+                ))}
+                {issued.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="empty">
+                      {placeholder || (holderSearch ? t("noMatch") : t("nothingIssued"))}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>{t("recentTitle")}</h3>
+              <p>{t("recentSub")}</p>
+            </div>
+          </div>
+          <div className="table-wrap" style={{ maxHeight: 440, overflowY: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>{t("colDate")}</th>
+                  <th>{t("colType")}</th>
+                  <th>{t("colItem")}</th>
+                  <th className="num">{t("colQty")}</th>
+                  <th>{t("colHolder")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.recent || []).map((r) => (
+                  <tr key={r.id} className="clickable" onClick={() => openItem(r.itemId)}>
+                    <td className="nowrap">{r.date ? n(r.date) : "—"}</td>
+                    <td>
+                      <span className={badgeClass(r.type)}>{txn(r.type)}</span>
+                    </td>
+                    <td>
+                      {r.itemName} <span className="muted nowrap">({r.inventoryNo})</span>
+                    </td>
+                    <td className="num">{n(r.qty)}</td>
+                    <td>{r.issuedTo || <span className="muted">—</span>}</td>
+                  </tr>
+                ))}
+                {data?.recent.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="empty">
+                      {t("noActivity")}
+                    </td>
+                  </tr>
+                )}
+                {!data && (
+                  <tr>
+                    <td colSpan={5} className="empty">
+                      {placeholder}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
