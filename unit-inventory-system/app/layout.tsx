@@ -14,8 +14,8 @@ import "./globals.css";
 import AppShell from "./components/AppShell";
 
 export const metadata: Metadata = {
-  title: "5 Signal Battalion Inventory",
-  description: "Unit Property Management System",
+  title: "UIMS · 5 Signal Battalion",
+  description: "Unit Inventory Management System — 5 Signal Battalion",
 };
 
 // Applies the saved theme before the page paints (no light-mode flash).

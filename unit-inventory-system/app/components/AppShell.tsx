@@ -92,7 +92,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className="app">
       <header className="topbar">
         <Link href="/" className="brand" aria-label="Dashboard">
-          <Image src="/logo.png" alt="" width={50} height={50} priority className="brand-logo" />
+          <Image src="/logo-mark.png" alt="5 Sig Bn UIMS" width={62} height={62} priority className="brand-logo" />
           <div>
             <h1>5 Signal Battalion</h1>
             <p>Unit Inventory</p>

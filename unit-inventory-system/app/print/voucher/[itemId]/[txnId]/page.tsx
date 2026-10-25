@@ -34,10 +34,10 @@ function Voucher({ item, txn, copy }: { item: Item; txn: Transaction; copy: stri
   return (
     <div className="voucher">
       <div className="voucher-head">
-        <Image src="/logo.png" alt="" width={56} height={56} />
+        <Image src="/logo-mark.png" alt="5 Sig Bn UIMS" width={64} height={64} />
         <div>
           <h1>5 Signal Battalion</h1>
-          <p>Unit Property Management System</p>
+          <p>UIMS · Unit Inventory Management System</p>
         </div>
         <span className="copy">{copy}</span>
       </div>

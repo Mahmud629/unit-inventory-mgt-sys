@@ -51,9 +51,15 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-card">
-        <Image src="/logo.png" alt="5 Signal Battalion" width={112} height={112} className="login-logo" priority />
-        <h1>Unit Inventory</h1>
-        <p className="sub">5 Signal Battalion · Unit Property Management System</p>
+        <Image
+          src="/logo.png"
+          alt="5 Sig Bn — UIMS, Unit Inventory Management System"
+          width={220}
+          height={220}
+          className="login-logo"
+          priority
+        />
+        <p className="sub">5 Signal Battalion · Please log in</p>
 
         <form onSubmit={handleLogin} className="login-form form form-single">
           <Field label="Username">

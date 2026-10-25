@@ -187,6 +187,7 @@ function InventoryRegister() {
       </div>
 
       <div className="print-only print-title">
+        <img src="/logo-mark.png" alt="" className="print-logo" />
         <h1>5 Signal Battalion — Unit Inventory Register</h1>
         <p>
           Printed {new Date().toLocaleString("en-GB")} · {filtered.length} item lines
