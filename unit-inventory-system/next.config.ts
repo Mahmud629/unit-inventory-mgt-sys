@@ -1,7 +1,12 @@
+import path from "path";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+
+  // This folder is the project, even if a stray package-lock.json sits in a
+  // parent folder (otherwise Next.js looks for packages in the wrong place).
+  turbopack: { root: path.resolve(__dirname) },
   poweredByHeader: false,
 
   // Native module: keep it out of the server bundle.
